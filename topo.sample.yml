@@ -1,0 +1,63 @@
+topology:
+
+  # Define build environments
+  # Syntax inspired from docker-compose format
+  envs:
+    debian12:
+      context: envs/debian12
+
+    alpine318:
+      context: .
+      containerfile: alpine318.cf
+     
+  # Automatically build node's configuration based on attributes specified in this file
+  templates:
+    bird.tmpl: 
+      path: configs/${node}.bird.cfg
+      builder: alpine318
+        
+  # Automatically build specified binaries
+  binaries:
+    bird:
+      builder: builders/bird.cf
+      env: debian12
+
+  default:
+    node:
+                              
+      binds:
+        - scripts/my_script.sh:./
+        - configs/${node}.bird.cfg:./
+        
+      sysctls:
+        net.ipv6.conf.all.forwarding: 1
+      
+      exec:
+        - ./bird -s ./${node}.bird.cfg &
+        
+    links:
+      attributes:
+        latency: 5
+        forward_metric: 1
+        reverse_metric: 1
+
+# Load graph from existing file
+#  GML is standard and encodes coordinates, nice for visualization
+graph:
+  path: topo.gml
+  format: gml
+
+# Either encode full graph here, or override/extend node/link specific attributes 
+# priority in case of clash: graph file < default < nodes/links section 
+nodes:
+  r2:
+    binds:
+      - configs/${node}.gobgp.cfg:./
+    exec:
+      - ./gobgp -f ${node}.gobgp.cfg &
+
+links:
+  - head: r0
+    tail: r1
+    attributes:
+      latency: 10
