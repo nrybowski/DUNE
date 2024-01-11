@@ -1,6 +1,7 @@
 import yaml
 
 class Infra:
+
     def __init__(self, path: str):
         with open(path, 'r') as fd:
             cfg = yaml.load(fd, yaml.Loader) 
@@ -21,6 +22,20 @@ class Infra:
 
         """ Parse mandatory sections. """
         if self._load_nodes(nodes) != 0: exit(1)
+
+        self.pre = None
+        """ List of commands to launch at phynode initialization. """
+        self.post = None
+        """ List of commands to launch after phynode initialization. """
+
+        """ Get setup commands, if any. """
+        setup = infra.get('setup')
+        if setup is not None:
+            self.pre = setup.get('pre')
+            self.post = setup.get('post')
+
+        self.builders = infra.get('builders')
+        """ Build environments. """
 
     def _load_nodes(self, nodes: dict) -> int:
 

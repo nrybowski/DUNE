@@ -2,6 +2,8 @@ from copy import deepcopy
 from sys import argv
 import yaml
 
+from jinja2 import Environment, meta
+
 import networkx
 
 def is_var(token: str) -> str:
@@ -12,35 +14,42 @@ class Pinned:
     Pinned process representation.
     A pinned process may require multiple cores, e.g., if the process spawns sub-processes.
     """
-    def __init__(self, cmd: str, environ: dict = None):
+    def __init__(self, cmd: str, environ: dict = None, pre_down: list = None, down: str = None):
         self.cmd = cmd
         """ The shell command to be pinned. """
         self.environ = environ
         """ Optionnal environment variables required by the pinned process. """
-        self._cores = []
+        self._cores = {}
         """ IDs of cores required by the process """
+        self.pre_down = pre_down
+        """ List of instructions to launch before stopping the current process """
+        self.down = down
+        """ One line instruction to launch to stop the current process """
 
     def __str__(self):
         return f"cmd <{self.cmd}>\nenviron <{self.environ}>"
 
     def from_dict(cfg: dict):
-        if 'cmd' not in cfg:
+        cmd = cfg.get('cmd')
+        if cmd is None:
             print("Malformed pinned: 'cmd' not found")
             return None
-        return Pinned(cfg['cmd'], cfg.get('environ'))
+        return Pinned(cmd, environ=cfg.get('environ'), pre_down=cfg.get('pre_down'), down=cfg.get('down'))
         
     def _get_cores(self) -> list:
         """ Lazyly collect cores list required for the current process """
 
         if len(self._cores) == 0: 
-            self._cores.append(0)
+            self._cores['core_0'] = 0
             if self.environ is not None:
                 for var, value in self.environ.items():
-                    value = is_var(value)
-                    if value is not None and len(value) > 5 and value[0:5] == 'core_':
-                        core = int(value[5:])
-                        if core not in self._cores:
-                            self._cores.append(core)
+                    env = Environment()
+                    ast = env.parse(value)
+                    for value in meta.find_undeclared_variables(ast):
+                        if len(value) > 5 and value[0:5] == 'core_':
+                            core = int(value[5:])
+                            if core not in self._cores:
+                                self._cores[value] = core
                         
         return self._cores
 
@@ -53,20 +62,29 @@ class Pinned:
 class Node:
     """ Represent an emulated node configuration. """
 
-    def __init__(self, pinned: list = None, sysctls: dict = None, execs: list = None):
+    def __init__(self, pinned: list = None, sysctls: dict = None, execs: list = None, templates: dict = None):
+        
+        # TODO: use classical constructor instead ?
         self.pinned = None if pinned is None else list(filter(lambda x: x is not None, [Pinned.from_dict(entry) for entry in pinned]))
         """ List of pinned processes, if any, for the current Node. """
+        
         self._cores = []
         """ List of core IDs required for each pinned process, if any. """
+        
         self.sysctls = sysctls
         """ List of sysctls, if any, to apply upon node initialization. """
+        
         self._addresses = {}
         """ 
         Dict of addresses in the node. They can be auto-generated or hardcoded.
         The key is the interface and the value a list of addresses regardless of the family.
         """
+        
         self.execs = execs
         """ List of one-shot commands, if any, to launch upon node startup. """
+        
+        self.templates = templates
+        """ Dict of templates to generate, if any. """
 
     def __str__(self):
         ret = f"pinned:\n"
@@ -83,6 +101,7 @@ class Node:
             pinned = cfg.get('pinned'),
             sysctls = cfg.get('sysctls'),
             execs = cfg.get('execs'),
+            templates = cfg.get('templates')
         )
 
     def _get_cores(self) -> list:
@@ -137,12 +156,6 @@ class Topo(networkx.MultiDiGraph):
         if self._parse_links(topo['links'], links_defaults) != 0: exit(1)
         if self._parse_nodes(topo['nodes'], nodes_defaults) != 0: exit(1)
     
-        for edge in self.edges(data=True, keys=True):
-            print(edge)
-
-        for node in self.nodes(data=True):
-            print(node)
-
     def _parse_links(self, links: list, defaults: dict = None) -> int:
 
         def parse_endpoint(v: str) -> tuple[str, str]:
@@ -163,8 +176,8 @@ class Topo(networkx.MultiDiGraph):
                     if def_key not in link:
                         link[def_key] = def_val
 
-                self.add_edge(head_node, tail_node, key=head_iface, **link)
-                self.add_edge(tail_node, head_node, key=tail_iface, **link)
+                self.add_edge(head_node, tail_node, key=(head_iface, tail_iface), **link)
+                self.add_edge(tail_node, head_node, key=(tail_iface, head_iface), **link)
           
             except KeyError:
                 print('No endpoint defined in link')
