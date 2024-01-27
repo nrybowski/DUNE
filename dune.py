@@ -1,5 +1,6 @@
 from copy import deepcopy
 from enum import StrEnum
+from re import match, sub
 import socket
 import yaml
 import sys
@@ -21,12 +22,34 @@ class ConfigSection(StrEnum):
     Processes = 'Processes'
     PreDown = 'PreDown'
     Down = 'Down'
-    
-def lo_from_id(nid: int) -> str:
-    # TODO: make prefix configurable
-    lo = bytes.fromhex(hex(((0xfc00 << 48) + (1 << 32) + (nid << 16)) << 64)[2:])
-    lo = socket.inet_ntop(socket.AF_INET6, lo)
-    return lo
+
+# def lo_from_id(nid: int) -> str:
+#     # TODO: make prefix configurable
+#     TODO: move in plugin
+#     lo = bytes.fromhex(hex(((0xfc00 << 48) + (1 << 32) + (nid << 16)) << 64)[2:])
+#     lo = socket.inet_ntop(socket.AF_INET6, lo)
+#     return lo
+
+
+_keywords = ['fun']
+_expr = '|'.join([f'^%{k} ' for k in _keywords])
+
+def _expand_env(plugins: dict, env: dict):
+
+    def _apply(entry: str):
+        """ Remove keyword form entry """
+        if m := match(f'({_expr})', entry):
+            raw_keyword = m.group(0)
+            entry = sub(raw_keyword, "", entry)
+            keyword = raw_keyword[1:-1]
+
+            """ Apply keyword function on entry """
+            if keyword == 'fun':
+                entry = eval(entry, plugins, {})
+
+        return entry
+
+    return {_apply(k): _expand_env(plugins, v) if isinstance(v, dict) else _apply(v) for k, v in env.items()}
 
 class Dune:
 
@@ -49,7 +72,17 @@ class Dune:
         if self.topo._total_cores > self.infra._total_cores:
             print('Specified infrastructure has not enough cores to allocate each process.')
             exit(1)
-       
+
+    def _load_plugins(self):
+        plugins_dir = os.path.join(self.base, 'plugins')
+        if not os.path.isdir(plugins_dir): return
+        import importlib
+        import pkgutil
+        sys.path.append(plugins_dir)
+        for _, name, _ in pkgutil.iter_modules([plugins_dir]):
+            module = importlib.import_module(name)
+            self._plugins[name] = module
+
     def allocate(self) -> dict:
         # TODO: clever way with buckets and CP, fill gaps if any
 
