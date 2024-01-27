@@ -294,62 +294,64 @@ class Dune:
             tag=builder,
             labels={'dune.builder': '1'}
         )
-        
-    def _generate_template(self, template: str, data: dict):
-        
-        builder = data.get('builder')
-        if builder is None:
-            print(f'Builder not specified for template <{template}>')
-            exit(1)
 
-        builder = self._get_builder(builder)
-        src_path = f'/data/{data["src"]}'        
-        volumes = {
-            data['src']: {
-                'bind': src_path,
-                'mode': 'ro'
-            },
-        }
-        self._docker.containers.run(builder, volumes=volumes)
+    def _generate_template(self, template: str, data: dict) -> str:
+        env = Environment(loader=FileSystemLoader(os.path.join(self.base, 'templates')))
+        return env.get_template(template).render(data)
 
-        
+        # with open(os.path.join(self.base, template), 'r') as fd:
+            # template = fd.read()
+        # return Template(template).render(data)
+
+
+        # builder = data.get('builder')
+        # if builder is None:
+        #     print(f'Builder not specified for template <{template}>')
+        #     exit(1)
+
+        # builder = self._get_builder(builder)
+        # src_path = f'/data/{data["src"]}'
+        # volumes = {
+        #     data['src']: {
+        #         'bind': src_path,
+        #         'mode': 'ro'
+        #     },
+        # }
+        # self._docker.containers.run(builder, volumes=volumes)
+
+
     def _add_link(self, head: str, tail: str, ifaces: tuple[str, str], data: dict):
 
         section = ConfigSection.Links
-        
+
         head_phynode = self._node_to_phynode(head)
         tail_phynode = self._node_to_phynode(tail)
         head_iface, tail_iface = ifaces
-        print(data)
-        
+
         if head_phynode == tail_phynode:
-            
+
             """ Both ends of the link lie on the same phynode, link is a veth pair. """
-            self._ip(section, f'l add dev {head_iface} type veth peer name {tail_iface} netns {tail}', head)
+            self._phynode_exec(head_phynode, section, f'ip l add dev {head_iface} netns {head} type veth peer name {tail_iface} netns {tail}')
 
-            # TODO: allocate ips if any
-
-            # TODO: set link attributes if any
-            if 'latency' in data:
-                # TODO
-                pass
-
-            mtu = data.get('mtu')
-            if mtu is not None:
-                self._ip(section, f'l set dev {head_iface} mtu {mtu}', head)
-                self._ip(section, f'l set dev {tail_iface} mtu {mtu}', tail)
-            
-            self._ip(section, f'l set dev {head_iface} up', head)
-            self._ip(section, f'l set dev {tail_iface} up', tail)
-            
         else:
 
             """ Both nodes are on separate phynodes, we create vlan-defined links """
+            # TODO: create VLAN and interfaces
             head_idx = self._get_node_idx(head)
             tail_idx = self._get_node_idx(tail)
             vlan_id = f'0x{head_idx :02x}{tail_idx :02x}'
             print(vlan_id)
 
+        """ Set link properties """
+        delay = data['latency'] if 'latency' in data else '0ms'
+        bw = data['bw'] if 'bw' in data else '1gbit'
+        self._node_exec(head, section, f'tc qdisc add dev {head_iface} root netem delay {delay} rate {bw}')
+        if mtu := data.get('mtu')  is not None:
+            self._ip(section, f'l set dev {head_iface} mtu {mtu}', head)
+            self._ip(section, f'l set dev {tail_iface} mtu {mtu}', tail)
+
+        self._ip(section, f'l set dev {head_iface} up', head)
+        self._ip(section, f'l set dev {tail_iface} up', tail)
 
     def _add_setup(self, section: ConfigSection):
         if section not in [ConfigSection.Pre, ConfigSection.Post]: return
