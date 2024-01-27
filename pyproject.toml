@@ -23,5 +23,10 @@ dependencies = [
   "docker==7.0.0",
 ]
 
+[project.optional-dependencies]
+mpf = [
+  "mpf @ git+ssh://git@github.com/mpiraux/mpf.git"
+]
+
 [project.scripts]
 dune = "dune:cli"

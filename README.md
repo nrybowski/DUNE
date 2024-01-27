@@ -1,6 +1,20 @@
-# Distributed Micro Network Emulation (DUNE)
+# Distributed Micro Network Emulation (DµNE)
 
 Framework allowing distributed emulation of large networks with micro overhead.
+
+## Install
+
+```shell
+pip install git+ssh://git@forge.uclouvain.be/inl/netutilsg/dune.git
+```
+
+or 
+
+```shell
+pip install git+ssh://git@forge.uclouvain.be/inl/netutilsg/dune.git[mpf]
+```
+
+to leverage the mpf backend.
 
 ## Quick Start
 
@@ -16,6 +30,7 @@ See [infra.sample.yml](infra.sample.yml) and [topo.sample.yml](topo.sample.yml) 
 - (Non-)Interactively configure the physical infrastructure with netns, veth pairs and vxlans.
 - Build node's configuration files based on templates and topology data.
 - Build binaries to run on nodes based on the physical environment requirements.
+- Offer extensability in topology configuration with user-provided plugins.
 
 ## Concepts
 
