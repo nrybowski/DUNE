@@ -1,9 +1,11 @@
 from copy import deepcopy
 from enum import StrEnum
 import socket
+import yaml
+import sys
 import os
 
-from jinja2 import Template, meta, Environment
+from jinja2 import Template, meta, Environment, FileSystemLoader
 from jinja2.nodes import Template as NodeTemplate
 import docker
 
@@ -28,7 +30,14 @@ def lo_from_id(nid: int) -> str:
 
 class Dune:
 
-    def __init__(self, path: str):
+    def __init__(self, base: str, topo: str):
+
+        path = os.path.join(base, topo)
+        self.base = base
+        self.name = topo
+
+        self._plugins = {}
+        self._load_plugins()
 
         # TODO: do not load twice if all config in a single file.
         self.topo = Topo(path)
@@ -79,7 +88,7 @@ class Dune:
             @param[in]   nid The node ID for which we ask the corresponding phynode.
             @return      The corresponding phynode ID.
         """
-        
+
         try:
             ret = self._allocation[nid][0]
         # TODO: catch exception if nid not in allocation matrix even if allocated
@@ -89,7 +98,7 @@ class Dune:
         return ret
 
     def _phynode_exec(self, pid: str, section: ConfigSection, cmd: str):
-        
+
         """ Run an arbitrary command on a given phynode.
             @param[in]  pid         The target phynode.
             @param[in]  cmd         The command to run on the phynode whose ID is @p phynode_id.
@@ -105,7 +114,7 @@ class Dune:
                 self._configs[pid] = {section: [cmd]}
 
     def _node_exec(self, nid: str, section: ConfigSection, cmd: str, environ: dict = None):
-        """ Execute @p cmd in the netns corresponding to the node @p node_id 
+        """ Execute @p cmd in the netns corresponding to the node @p node_id
             @param      nid The ID of the node on which @p cmd has to be executed.
             @param      cmd     The command to execute on node @p node_id.
             @post                   The command has been successfully added to the XML output file.
@@ -125,7 +134,7 @@ class Dune:
 
         renv = {'node': nid, **cores}
         cmd = Template(pinned.cmd).render(renv)
-            
+
         self._node_exec(nid, ConfigSection.Processes, f'taskset -c {cores["core_0"]} {cmd}', environ)
 
         """ Add down instruction. """
@@ -134,7 +143,7 @@ class Dune:
 
         # TODO: add PreDown
 
-            
+
     def _ip(self, section: ConfigSection, cmd: str, nid: str = None):
         """ Run an ip-based command on a phynode.
             @param[in]  cmd     The ip subcommand to run.
@@ -162,7 +171,7 @@ class Dune:
             @param      node_id The ID of the node to add.
             @post               A node with @p node_id ID has been added to the corresponding
                                 physical host. Its loopback interface has been configured with a
-                                correct link-local IPv6 address to quick fix the BIRD IPv6 bug and 
+                                correct link-local IPv6 address to quick fix the BIRD IPv6 bug and
                                 a ULA in the range fc00:1::/64.
             @return     the config of the node added to the topology
         """
@@ -170,7 +179,8 @@ class Dune:
         section = ConfigSection.Nodes
         phynode = self._node_to_phynode(nid)
         node = self.topo.nodes[nid]['cfg']
-        
+        node_idx = list(self.topo.nodes).index(nid)
+
         """ Add a netns with ID @p nid on the corresponding phynode """
         self._phynode_exec(phynode, section, f'ip netns add {nid}')
 
@@ -180,22 +190,23 @@ class Dune:
             for address in lo:
                 self._ip(section, f'a add {address} dev lo', nid)
 
-        # TODO: Check if auto-generation is requested with prefixes
-        """ Generate the ULA based on the node ID @p node_id """
-        idx = list(self.topo.nodes).index(nid)
-        gen_lo = lo_from_id(idx)
-        if lo is not None:
-            lo.append(gen_lo)
-        else:
-            node._addresses['lo'] = [gen_lo]
-        self._ip(section, f'a add {gen_lo} dev lo', nid)
+        # # TODO: Check if auto-generation is requested with prefixes
+        # TODO: move this in a plugin
+        # """ Generate the ULA based on the node ID @p node_id """
+        # idx = list(self.topo.nodes).index(nid)
+        # gen_lo = lo_from_id(idx)
+        # if lo is not None:
+        #     lo.append(gen_lo)
+        # else:
+        #     node._addresses['lo'] = [gen_lo]
+        # self._ip(section, f'a add {gen_lo} dev lo', nid)
 
         self._ip(section, 'l set dev lo up', nid)
 
         """ Apply execs if any. """
         if node.execs is not None:
             for cmd in node.execs:
-                self._node_exec(nid, section, cmd)
+                self._node_exec(nid, section, Template(cmd).render(dict(node=nid, **node.env)))
 
         """ Apply sysctls, if any. """
         if node.sysctls is not None:
@@ -208,9 +219,27 @@ class Dune:
                 self._node_pinned(nid, process, idx)
 
         """ Generate files specified by templates, if any. """
-        # if node.templates is not None:
-        #     for template, data in node.templates.items():
-        #         self._generate_template(template, data)
+        if node.templates is not None:
+
+            """ First expansion of the node environment. """
+            nenv = yaml.safe_load(Template(str(node.env)).render(dict(node=nid, addrs=node._addresses)))
+
+            """ Apply plugin function calls, if any. """
+            nenv = _expand_env(self._plugins, nenv)
+
+            for template, data in node.templates.items():
+                ifaces = {iface: dict(peer=peer, **data) for (_, peer, (iface, _), data) in self.topo.edges(nid, data=True, keys=True)}
+                renv = {
+                    'rid': node.env['rid'] if 'rid' in node.env else socket.inet_ntoa(socket.inet_aton(str(node_idx+1))),
+                    'ifaces': ifaces,
+                    'node': nid,
+                }
+                renv.update(nenv)
+
+                """ Template rendering with final expanded environment. """
+                data['content'] = self._generate_template(template, renv)
+                data['dst'] = Template(data['dst']).render({'node': nid})
+
 
     def _get_builder(self, builder: str):
 
@@ -221,9 +250,9 @@ class Dune:
             exit(1)
 
         # TODO: sanity check on builder_cfg
-        
+
         if self._docker is None: self._docker = docker.from_env()
-            
+
         img = self._docker.images.list(name=builder, filters={'label': ['dune.builder']})
         path = os.path.join(os.getcwd(), builder_cfg['context'])
         return img[0] if len(img) > 0 else self._docker.images.build(
@@ -329,25 +358,24 @@ class Dune:
                     iface_set[tail].append(ifaces[1])
                 except KeyError:
                     ifaces_set[tail] = [ifaces[1]]
-                    
+
         """ Pre-setup hook. """
         self._add_setup(ConfigSection.Pre)
-                
+
         """ Post-setup hook. """
         self._add_setup(ConfigSection.Post)
 
     def dump(self, format: str = 'text'):
         import os
 
-        dir = '.dune'
-        cwd = os.getcwd()
-        base = os.path.join(cwd, dir)
-        if not os.path.exists(base): os.mkdir(dir)
+        base = os.path.join(self.base, '.dune')
+        if not os.path.exists(base): os.mkdir(base)
 
+        """ Dump phynodes configs """
         for phynode, config in self._configs.items():
             print(phynode, config)
             with open(os.path.join(base, phynode), 'w') as fd:
-                
+
                 if format == 'text':
                     for k, v in [
                         ('# PreSetup', ConfigSection.Pre),
@@ -363,18 +391,73 @@ class Dune:
                     import json
                     json.dump(config, fd)
 
+        """ Dump templates """
+        nodes_dir = os.path.join(base, 'nodes')
+        if not os.path.exists(nodes_dir): os.mkdir(nodes_dir)
+        for node, cfg in self.topo.nodes(data=True):
+            cfg = cfg['cfg']
+            targets = {}
+            node_dir = os.path.join(nodes_dir, node)
+            if not os.path.exists(node_dir): os.mkdir(node_dir)
+            for template, data in cfg.templates.items():
+                local = os.path.basename(data['dst'])
+                targets[local] = data['dst']
+                print(node, template, data)
+                dst = os.path.join(node_dir, local)
+                with open(dst, 'w') as fp:
+                    fp.write(data['content'])
+            with open(os.path.join(node_dir, 'targets.yml'), 'w') as fd:
+                yaml.dump(targets, fd)
 
-if __name__ == '__main__':
-    # path = 'house.yml'
-    path = 'abilene.yml'
-    dune = Dune(path)
+        """ Dump roles for mpf """
+        seen = []
+        roles = {}
+        for head, tail, (head_iface, tail_iface),  in self.topo.edges(keys=True):
+            forward = f'{head}:{head_iface}-{tail}:{tail_iface}'
+            reverse = f'{tail}:{tail_iface}-{head}:{head_iface}'
+            if reverse in seen: continue
+            seen.append(forward)
+
+            """ Add forward direction """
+            a = (forward, 'forward')
+            try:
+                roles[head][head_iface] = a
+            except KeyError:
+                roles[head] = {head_iface: a}
+
+            """ Add reverse direction """
+            b = (forward, 'backward')
+            try:
+                roles[tail][tail_iface] = b
+            except KeyError:
+                roles[tail] = {tail_iface: b}
+
+        r = [{'role': role, 'namespace': role, 'interfaces': [{'name': iface, 'link': name, 'direction': ord} for iface, (name, ord) in ifaces.items()]} for role, ifaces in roles.items()]
+        name = sub('\.dune\.yml', '', self.name)
+        with open(os.path.join(self.base, f'{name}.mpf.yml'), 'w') as fd:
+            yaml.dump(r, fd)
+
+def cli():
+    from pathlib import Path
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-t', '--topology', type=Path, required=True, help='Topology definition file')
+    parser.add_argument('-b', '--backend', type=str, default='mpf', choices=['mpf', 'shell'], help="""
+    Backend used to apply the topology.
+
+    mpf: Leverage mpf to deploy an ipyarallel cluster defined by the provided infrastructure.
+
+    shell: Produce a shell script per phynode that users have to manually transfer and execute.
+    """)
+    args = parser.parse_args()
+
+    base = args.topology.parent
+    topo = args.topology.name
+
+    dune = Dune(base, topo)
     dune.build()
-    # dune.dump()
     dune.dump(format='json')
-    
-    # for phynode, cfg in dune._configs.items():
-    #     for section, data in cfg.items():
-    #         print(phynode, section, '\n', data)
 
-    # for nid, node in dune.topo.nodes(data=True):
-    #     print(nid, node['cfg']._addresses)
+if __name__ == 'dune' or __name__ == '__main__':
+    cli()
