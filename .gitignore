@@ -2,3 +2,6 @@ env/
 doc_env/
 site/
 tags
+build/
+__pycache__/
+*.egg-info/
