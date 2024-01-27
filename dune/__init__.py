@@ -10,8 +10,8 @@ from jinja2 import Template, meta, Environment, FileSystemLoader
 from jinja2.nodes import Template as NodeTemplate
 import docker
 
-from infrastructure import Infra
-from topology import Topo, Pinned
+from dune.infrastructure import Infra
+from dune.topology import Topo, Pinned
 
 
 class ConfigSection(StrEnum):
