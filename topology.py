@@ -2,9 +2,11 @@ from copy import deepcopy
 from sys import argv
 import yaml
 
-from jinja2 import Environment, meta
+from jinja2 import Environment, meta, Template
 
 import networkx
+
+RESERVED_KEYS = ['pinned', 'sysctls', 'exec', 'templates', 'addrs']
 
 def is_var(token: str) -> str:
     return None if len(token) <=3 or token[0] != '$' or token[1] != '{' or token[-1] != '}' else token[2:-1]
@@ -62,7 +64,7 @@ class Pinned:
 class Node:
     """ Represent an emulated node configuration. """
 
-    def __init__(self, pinned: list = None, sysctls: dict = None, execs: list = None, templates: dict = None):
+    def __init__(self, pinned:list=None, addrs:dict=None, sysctls:dict=None, execs:list=None, templates:dict=None, env:dict=None):
         
         # TODO: use classical constructor instead ?
         self.pinned = None if pinned is None else list(filter(lambda x: x is not None, [Pinned.from_dict(entry) for entry in pinned]))
@@ -74,7 +76,7 @@ class Node:
         self.sysctls = sysctls
         """ List of sysctls, if any, to apply upon node initialization. """
         
-        self._addresses = {}
+        self._addresses = addrs
         """ 
         Dict of addresses in the node. They can be auto-generated or hardcoded.
         The key is the interface and the value a list of addresses regardless of the family.
@@ -85,6 +87,9 @@ class Node:
         
         self.templates = templates
         """ Dict of templates to generate, if any. """
+
+        self.env = env
+        """ Dict with additional user-defied data"""
 
     def __str__(self):
         ret = f"pinned:\n"
@@ -97,11 +102,18 @@ class Node:
         
         # TODO: check sysctls syntax
 
+        templates = cfg.get('templates')
+        if templates is not None:
+            templates = {k: {'dst': v, 'content': None} for k, v in templates.items()}
+        env = {k: v for k, v in cfg.items() if k not in RESERVED_KEYS}
+
         return Node(
             pinned = cfg.get('pinned'),
             sysctls = cfg.get('sysctls'),
-            execs = cfg.get('execs'),
-            templates = cfg.get('templates')
+            execs = cfg.get('exec'),
+            addrs = cfg.get('addrs'),
+            templates = templates,
+            env = env
         )
 
     def _get_cores(self) -> list:
