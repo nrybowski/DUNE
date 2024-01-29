@@ -346,7 +346,7 @@ class Dune:
         delay = data['latency'] if 'latency' in data else '0ms'
         bw = data['bw'] if 'bw' in data else '1gbit'
         self._node_exec(head, section, f'tc qdisc add dev {head_iface} root netem delay {delay} rate {bw}')
-        if mtu := data.get('mtu')  is not None:
+        if (mtu := data.get('mtu')) is not None:
             self._ip(section, f'l set dev {head_iface} mtu {mtu}', head)
             self._ip(section, f'l set dev {tail_iface} mtu {mtu}', tail)
 
