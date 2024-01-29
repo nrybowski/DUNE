@@ -296,7 +296,7 @@ class Dune:
         )
 
     def _generate_template(self, template: str, data: dict) -> str:
-        env = Environment(loader=FileSystemLoader(os.path.join(self.base, 'templates')))
+        env = Environment(loader=FileSystemLoader(os.path.join(self.base, 'templates'), followlinks=True))
         return env.get_template(template).render(data)
 
         # with open(os.path.join(self.base, template), 'r') as fd:
