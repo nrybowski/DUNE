@@ -350,6 +350,14 @@ class Dune:
             self._ip(section, f'l set dev {head_iface} mtu {mtu}', head)
             self._ip(section, f'l set dev {tail_iface} mtu {mtu}', tail)
 
+        if (addrs := self.topo.nodes[head]['cfg']._addresses.get(head_iface)):
+            for addr in addrs:
+                self._ip(section, f'a add {addr} dev {head_iface}', head)
+
+        if (addrs := self.topo.nodes[tail]['cfg']._addresses.get(tail_iface)):
+            for addr in addrs:
+                self._ip(section, f'a add {addr} dev {tail_iface}', tail)
+
         self._ip(section, f'l set dev {head_iface} up', head)
         self._ip(section, f'l set dev {tail_iface} up', tail)
 
