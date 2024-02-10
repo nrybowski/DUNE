@@ -49,7 +49,7 @@ def _expand_env(plugins: dict, env: dict):
 
         return entry
 
-    return {_apply(k): _expand_env(plugins, v) if isinstance(v, dict) else _apply(v) for k, v in env.items()}
+    return {_apply(k): _expand_env(plugins, v) if isinstance(v, dict) else [_apply(entry) for entry in v] if isinstance(v, list) else _apply(v) for k, v in env.items()}
 
 class Dune:
 
@@ -218,21 +218,13 @@ class Dune:
         self._phynode_exec(phynode, section, f'ip netns add {nid}')
 
         """ Set 'lo' addresses if specified or required. """
-        lo = node._addresses.get('lo')
-        if lo is not None:
-            for address in lo:
+        if (lo:=node._addresses.get('lo')):
+            lo = yaml.safe_load(Template(str(lo)).render(dict(node=nid)))
+            lo = _expand_env(self._plugins, dict(addresses=dict(lo=lo)))
+            for address in lo['addresses']['lo']:
                 self._ip(section, f'a add {address} dev lo', nid)
 
-        # # TODO: Check if auto-generation is requested with prefixes
-        # TODO: move this in a plugin
-        # """ Generate the ULA based on the node ID @p node_id """
-        # idx = list(self.topo.nodes).index(nid)
-        # gen_lo = lo_from_id(idx)
-        # if lo is not None:
-        #     lo.append(gen_lo)
-        # else:
-        #     node._addresses['lo'] = [gen_lo]
-        # self._ip(section, f'a add {gen_lo} dev lo', nid)
+        # TODO: Check if auto-generation is requested with prefixes
 
         self._ip(section, 'l set dev lo up', nid)
 
