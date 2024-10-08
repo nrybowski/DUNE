@@ -9,23 +9,23 @@ packages = ["dune"]
 name = 'dune'
 dynamic = ["version"]
 dependencies = [
-  "certifi==2023.11.17",
-  "charset-normalizer==3.3.2",
-  "idna==3.6",
-  "Jinja2==3.1.2",
-  "MarkupSafe==2.1.3",
-  "networkx==3.2.1",
-  "packaging==23.2",
-  "pyxdg==0.28",
-  "PyYAML==6.0.1",
-  "requests==2.31.0",
-  "urllib3==2.1.0",
-  "docker==7.0.0",
+  "certifi>=2023.11.17",
+  "charset-normalizer>=3.3.2",
+  "idna>=3.6",
+  "Jinja2>=3.1.2",
+  "MarkupSafe>=2.1.3",
+  "networkx>=3.2.1",
+  "packaging>=23.2",
+  "pyxdg>=0.28",
+  "PyYAML>=6.0.1",
+  "requests>=2.31.0",
+  "urllib3>=2.1.0",
+  "docker>=7.0.0",
 ]
 
 [project.optional-dependencies]
 mpf = [
-  "mpf @ git+ssh://git@github.com/mpiraux/mpf.git"
+  "mpf @ git+https://github.com/mpiraux/mpf.git"
 ]
 
 [project.scripts]
