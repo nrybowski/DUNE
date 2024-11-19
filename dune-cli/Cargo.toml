@@ -1,0 +1,17 @@
+[package]
+name = "dune-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+graphrs = "0.9.0"
+clap = { version = "4.5.20", features = ["derive"] }
+toml = "0.8.19"
+serde = { version = "1.0.215", features = ["derive"] }
+
+dune-core = { path = "../dune-core" }
+dune-mpf = { path = "../dune-mpf" }
+itertools = "0.13.0"
+
+[lints]
+workspace = true

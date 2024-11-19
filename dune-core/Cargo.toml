@@ -1,0 +1,12 @@
+[package]
+name = "dune-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+graphrs = "0.9.0"
+minijinja = "2.3.1"
+regex = "1.11.0"
+serde = { version = "1.0.210", features = ["derive", "serde_derive"] }
+serde_ignored = "0.1.10"
+toml = "0.8.19"

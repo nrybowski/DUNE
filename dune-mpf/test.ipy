@@ -1,0 +1,17 @@
+#! /usr/bin/ipython
+
+import pytoml
+import yaml
+import mmap
+
+import dune_mpf
+import mpf
+
+mpf_cfg = pytoml.loads(dune_mpf.load_mpf_cfg("../test.toml"))
+mpf_cfg = yaml.dump(mpf_cfg)
+
+with open("/dev/shm/mpf_cfg.yml", "r+") as f:
+    f.write(mpf_cfg)
+    f.seek(0)
+    m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    mpf.setup(f)

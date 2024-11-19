@@ -1,0 +1,18 @@
+[workspace]
+
+members = [
+  "dune-core",
+  "dune-ntf",
+  "dune-cli",
+  "dune-mpf"
+]
+
+default-members = [
+  "dune-cli"
+]
+
+resolver = "2"
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_code = "forbid"

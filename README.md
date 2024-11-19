@@ -1,20 +1,45 @@
-# Distributed Micro Network Emulation (DµNE)
+# Distributed Micro Network Emulation (DµNE) Framework
 
-Framework allowing distributed emulation of large networks with micro overhead.
+Orchestrate your emulated networking experiments in a breeze.
+
+> Framework allowing distributed emulation of large networks with micro overhead.
+
+## Features
+
+### Ressources Allocation
+
+Define your physical nodes (_Phynodes_), e.g., experiment servers, and your virtual nodes (_Nodes_), e.g., routers, in a single configuration file.
+Specify the amount of core required for each emulated _Node_ and DUNE will allocate the required ressources on the _Phynodes_. 
+
+> "core_<X>" is a reserved keyword specifying that a core must be allocated.
+
+```toml
+TODO
+```
+
+### Defaults and Overrides
+
+Define default values for every resource and override them case-by-case if required. 
+
+```toml
+[topology.defaults.nodes.sysctls]
+"net.ipv6.conf.default.forwarding" = "1"
+
+[topolofy.nodes.r0]
+
+[topolofy.nodes.r1]
+"net.ipv6.conf.default.forwarding" = "0"
+
+[topolofy.nodes.r2]
+```
+
+### Templates Rendering
+
+### Software Build
 
 ## Install
 
-```shell
-pip install git+ssh://git@forge.uclouvain.be/inl/netutilsg/dune.git
-```
-
-or 
-
-```shell
-pip install git+ssh://git@forge.uclouvain.be/inl/netutilsg/dune.git[mpf]
-```
-
-to leverage the mpf backend.
+TODO
 
 ## Quick Start
 
