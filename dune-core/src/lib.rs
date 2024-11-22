@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use cfg::{Config, Endpoint, Interface, Link, Node, Phynodes};
-use graphrs::{Graph, GraphSpecs};
+// use graphrs::{Graph, GraphSpecs};
+use serde::{Deserialize, Serialize};
 
 pub mod cfg;
 
@@ -30,14 +31,21 @@ pub struct ExperimentalSetup {
     pub down: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Dune {
     pub nodes: HashMap<NodeId, Node>,
-    topo: Graph<NodeId, ()>,
+    // topo: Graph<NodeId, ()>,
     pub infra: Phynodes,
     allocated: bool,
 }
 
 impl Dune {
+    pub fn init(cfg: &PathBuf) -> Self {
+        let mut dune = Self::new(cfg);
+        dune.allocate();
+        dune
+    }
+
     pub fn new(cfg: &PathBuf) -> Self {
         fn load_interface(
             nodes: &mut HashMap<String, Node>,
@@ -50,13 +58,14 @@ impl Dune {
                 let iface = Interface::new(&cfg.topology.defaults.links, &link, idx);
                 // TODO: check that interface is not defined multiple times
                 node.interfaces
+                    .get_or_insert_with(HashMap::new)
                     .insert(link.endpoints[idx].interface.clone(), iface);
             }
         }
 
         // Load DUNE's configuration
         let cfg = Config::new(cfg.to_str().unwrap());
-        let mut topo = Graph::<NodeId, _>::new(GraphSpecs::multi_directed());
+        // let mut topo = Graph::<NodeId, _>::new(GraphSpecs::multi_directed());
 
         // Collect and expand Nodes data
         let mut nodes = cfg
@@ -64,10 +73,10 @@ impl Dune {
             .nodes
             .iter()
             .map(|(name, config)| {
-                topo.add_node(graphrs::Node::from_name(name.clone()));
+                // topo.add_node(graphrs::Node::from_name(name.clone()));
                 (
                     name.clone(),
-                    Node::new(&cfg.topology.defaults.nodes, &config),
+                    Node::new(&cfg.topology.defaults.nodes, &config, name),
                 )
             })
             .collect::<HashMap<String, Node>>();
@@ -81,7 +90,7 @@ impl Dune {
 
         Self {
             nodes,
-            topo,
+            // topo,
             infra: cfg.infrastructure,
             allocated: false,
         }
@@ -90,6 +99,7 @@ impl Dune {
     /// Allocate requested cores to physical cores, if possible given the provided infrastructure.
     pub fn allocate(&mut self) {
         if !self.allocated {
+            self.allocated = true;
             // Sort nodes by decreasing number of cores to allocate
             let mut cores: BTreeMap<usize, BTreeSet<NodeId>> = BTreeMap::new();
             self.nodes.iter().for_each(|(node_id, node)| {
@@ -125,7 +135,7 @@ impl Dune {
                                 node.cores
                                     .iter_mut()
                                     .for_each(|(_, core)| *core = Some(available.pop().unwrap()));
-                                node.phynode = name.clone();
+                                node.phynode = Some(name.clone());
                                 break;
                             }
                         }
@@ -135,16 +145,34 @@ impl Dune {
         }
     }
 
-    fn phynode(&mut self, node_id: NodeId) -> &String {
-        if !self.allocated {
-            self.allocate();
-        }
-        &self.nodes[&node_id].phynode
+    pub fn phynodes(&self) -> Vec<NodeId> {
+        self.infra
+            .nodes
+            .iter()
+            .map(|(phynode, _)| phynode.clone())
+            .collect::<Vec<NodeId>>()
     }
 
-    fn phynode_exec(&self, pynode: String, step: SetupStep, cmd: String) {}
-
-    fn node_exec(&mut self, node_id: NodeId, step: SetupStep, cmd: String) {
-        let phynode = self.phynode(node_id);
+    pub fn phynode_setup(&self, phynode: NodeId) {
+        self.nodes.iter().for_each(|(name, node)| {
+            if let Some(node_phynode) = &node.phynode
+                && node_phynode == &phynode
+            {
+                node.setup();
+            }
+        })
     }
+
+    // fn phynode(&mut self, node_id: NodeId) -> &String {
+    //     if !self.allocated {
+    //         self.allocate();
+    //     }
+    //     &self.nodes[&node_id].phynode
+    // }
+
+    // fn phynode_exec(&self, pynode: String, step: SetupStep, cmd: String) {}
+
+    // fn node_exec(&mut self, node_id: NodeId, step: SetupStep, cmd: String) {
+    //     let phynode = self.phynode(node_id);
+    // }
 }
