@@ -2,7 +2,6 @@
 
 members = [
   "dune-core",
-  "dune-ntf",
   "dune-cli",
   "dune-mpf"
 ]
