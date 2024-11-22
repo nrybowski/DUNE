@@ -4,7 +4,9 @@ use std::net::IpAddr;
 use std::{collections::HashMap, path::PathBuf};
 
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyString};
 use serde::{de::Error, Deserialize, Serialize};
+use serde_json;
 
 use dune_core::{cfg::Phynode, Dune};
 
@@ -115,11 +117,8 @@ impl TryFrom<&Dune> for Config {
             // Collect namespaces for each Phynode
             let mut namespaces: HashMap<String, Vec<Namespace>> = HashMap::new();
             dune.nodes.iter().for_each(|(name, node)| {
-                let ns = Namespace {
-                    role: name.clone(),
-                    namespace: name.clone(),
-                    interfaces: node
-                        .interfaces
+                let interfaces = if let Some(interfaces) = &node.interfaces {
+                    interfaces
                         .iter()
                         .map(|(ifname, iface)| {
                             let peer = iface.peer.as_ref().unwrap();
@@ -139,13 +138,22 @@ impl TryFrom<&Dune> for Config {
                                 name: ifname.clone(),
                             })
                         })
-                        .collect(),
+                        .collect::<Vec<Interface>>()
+                } else {
+                    vec![]
+                };
+                let ns = Namespace {
+                    role: name.clone(),
+                    namespace: name.clone(),
+                    interfaces,
                 };
 
-                match namespaces.get_mut(&node.phynode) {
-                    Some(entry) => entry.push(ns),
-                    None => {
-                        let _ = namespaces.insert(node.phynode.clone(), vec![ns]);
+                if let Some(phynode) = &node.phynode {
+                    match namespaces.get_mut(phynode) {
+                        Some(entry) => entry.push(ns),
+                        None => {
+                            let _ = namespaces.insert(phynode.clone(), vec![ns]);
+                        }
                     }
                 }
             });
@@ -171,17 +179,74 @@ impl TryFrom<&Dune> for Config {
     }
 }
 
-// ==== Python FFI ====
-
-#[pyfunction]
-fn load_mpf_cfg(cfg: PathBuf) -> String {
-    let cfg = Config::try_from(&cfg).unwrap();
-    toml::to_string(&cfg).unwrap()
+impl Config {
+    pub fn dump(&self) -> String {
+        toml::to_string(&self).unwrap()
+    }
 }
 
-// #[pyfunction]
+// ==== Python FFI ====
+
+#[pyclass(module = "dune_mpf")]
+#[derive(Serialize, Deserialize)]
+struct MpfDune(Dune);
+
+#[pymethods]
+impl MpfDune {
+    fn phynodes(&self) -> Vec<String> {
+        self.0.phynodes()
+    }
+
+    fn setup(&self, phynode: String) {
+        self.0.phynode_setup(phynode);
+    }
+
+    fn dump(&self) {
+        println!("{:#?}", self.0);
+    }
+
+    fn dumps(&self, py: Python<'_>) -> PyResult<PyObject> {
+        Ok(PyString::new(py, toml::ser::to_string(&self).unwrap().as_str()).to_object(py))
+    }
+
+    // Some black-magic to make MpfDune picklable. DO NOT TOUCH.
+    // See https://github.com/PyO3/pyo3/issues/100#issuecomment-2244769044
+    #[staticmethod]
+    pub fn deserialize(data: Vec<u8>) -> Self {
+        Self(serde_json::from_slice(&data).unwrap())
+    }
+
+    pub fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        py.run_bound("import dune_mpf", None, None).unwrap();
+        let cls = py
+            .eval_bound("dune_mpf.MpfDune.deserialize", None, None)
+            .unwrap();
+        let data = PyBytes::new(py, &serde_json::to_vec(&self).unwrap()).to_object(py);
+        Ok((cls.to_object(py), (data,).to_object(py)))
+    }
+}
+
+#[pyclass]
+struct MpfConfig(Config);
+
+#[pymethods]
+impl MpfConfig {
+    fn dump(&self) -> String {
+        self.0.dump()
+    }
+}
+
+#[pyfunction]
+fn load(cfg: PathBuf) -> (MpfDune, MpfConfig) {
+    let dune = Dune::init(&cfg);
+    let config = Config::try_from(&dune).unwrap();
+    (MpfDune(dune), MpfConfig(config))
+}
+
 #[pymodule]
 fn dune_mpf(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(load_mpf_cfg, m)?)?;
+    m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_class::<MpfDune>()?;
+    m.add_class::<MpfConfig>()?;
     Ok(())
 }
