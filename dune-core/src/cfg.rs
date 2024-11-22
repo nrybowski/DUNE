@@ -1,12 +1,18 @@
 use std::collections::HashMap;
 use std::fs;
 use std::net::IpAddr;
+use std::process::Command;
 use std::str::{self, FromStr};
 use std::vec::Vec;
 
+use futures::executor::block_on;
+use ipnetwork::IpNetwork;
 use minijinja::Environment;
 use regex::Regex;
-use serde::{de::Visitor, Deserialize, Serialize};
+use rtnetlink::NetworkNamespace;
+use serde::{de::Visitor, Deserialize, Serialize, Serializer};
+
+use crate::NodeId;
 
 fn expand<T: std::iter::IntoIterator<Item = U> + std::iter::Extend<U> + Clone, U>(
     node: &mut Option<T>,
@@ -149,7 +155,7 @@ pub struct LinksDefaults {
 
 // ==== Interface ====
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Interface {
     /// Name of the Interface
     pub name: String,
@@ -232,34 +238,89 @@ impl Interface {
 
         iface
     }
+
+    pub fn setup(&self, node: &NodeId, addrs: Option<&Vec<IpNetwork>>) {
+        // Configure link.
+        // If the peer interface is on the same node, the link is created with
+        // a pair of virtual interfaces (veth).
+        // If both interfaces are not on the same phynode, create a vlan.
+        if let Some(endpoint) = &self.peer {
+            // e.g., ip l add eth0 netns r0 type veth peer name eth0 netns r1
+            let _ = Command::new("ip")
+                .arg("l")
+                .arg("add")
+                .arg(&self.name)
+                .arg("netns")
+                .arg(node)
+                .arg("type")
+                .arg("veth")
+                .arg("peer")
+                .arg("name")
+                .arg(&endpoint.interface)
+                .arg("netns")
+                .arg(&endpoint.node)
+                .output();
+        } else if &self.name != "lo" {
+            // TODO
+        }
+
+        if let Some(addrs) = addrs {
+            addrs.iter().for_each(|addr| {
+                let _ = Command::new("ip")
+                    .arg("-n")
+                    .arg(node)
+                    .arg("a")
+                    .arg("add")
+                    .arg(addr.to_string())
+                    .arg("dev")
+                    .arg(&self.name)
+                    .output();
+            });
+        }
+
+        // Set interface up
+        let _ = Command::new("ip")
+            .arg("-n")
+            .arg(node)
+            .arg("l")
+            .arg("set")
+            .arg("dev")
+            .arg(&self.name)
+            .arg("up")
+            .output();
+    }
 }
 
 // ==== Node ====
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Node {
     // ==== Fields provided in the configuration ====
     pub sysctls: Option<Sysctl>,
     pub templates: Option<Templates>,
     pub exec: Option<Exec>,
     pub pinned: Option<Vec<Pinned>>,
-    pub addrs: Option<HashMap<String, Vec<IpAddr>>>,
+    pub addrs: Option<HashMap<String, Vec<IpNetwork>>>,
     #[serde(default, flatten)]
     _additional_fields: Option<HashMap<String, toml::Value>>,
 
     // ==== DUNE's internal fields ====
+    // Some fields should not be deserialized from the DUNE's configuration file but
+    // they have to be serializable to send DUNE context to phynodes.
+    // Hence, they are wrapped in Option so that they are None upon configuration parsing
+    /// Node's name
+    pub name: Option<String>,
     /// Mapping of core identifier and real core number
     #[serde(skip)]
     pub cores: HashMap<CoreId, Option<u64>>,
     /// Phynode to which the current Node is attached
-    #[serde(skip)]
-    pub phynode: String,
-    #[serde(skip)]
-    pub interfaces: HashMap<String, Interface>,
+    pub phynode: Option<String>,
+    // #[serde(skip)]
+    pub interfaces: Option<HashMap<String, Interface>>,
 }
 
 impl Node {
-    pub fn new(dflt: &Option<NodesDefaults>, config: &Self) -> Self {
+    pub fn new(dflt: &Option<NodesDefaults>, config: &Self, name: &String) -> Self {
         // Expand Node configuration from Defaults
         let mut node = match dflt {
             Some(dflt) => Node::from(dflt),
@@ -272,6 +333,7 @@ impl Node {
         expand(&mut node.exec, &config.exec);
         expand(&mut node.pinned, &config.pinned);
         node.addrs = config.addrs.clone();
+        node.name = Some(name.clone());
 
         // TODO: sanity check: core_id defined in a single Pinned process unless duplicate entries are explicitely allowed
         // FIXME: What happens if multiple Pinned process use undertone core_0 ?
@@ -291,13 +353,88 @@ impl Node {
     pub fn cores(&self) -> usize {
         self.cores.len()
     }
+
+    pub fn setup(&self) {
+        // FIXME: Use rtnetlink rather than Command calls
+
+        // TODO: Log errors if any
+        if let Some(netns) = &self.name {
+            // 1. Create netns
+            let _ = block_on(NetworkNamespace::add(netns.clone()));
+
+            if let Some(addrs) = &self.addrs
+                && let Some(addrs) = addrs.get("lo")
+            {
+                addrs.iter().for_each(|addr| {
+                    println!("lo {}", addr.to_string());
+                    let _ = Command::new("ip")
+                        .arg("-n")
+                        .arg(netns)
+                        .arg("a")
+                        .arg("add")
+                        .arg(addr.to_string())
+                        .arg("dev")
+                        .arg("lo")
+                        .output();
+                });
+            }
+
+            // Set interface up
+            let _ = Command::new("ip")
+                .arg("-n")
+                .arg(netns)
+                .arg("l")
+                .arg("set")
+                .arg("dev")
+                .arg("lo")
+                .arg("up")
+                .output();
+
+            // 2. Setup links: create veth pairs or vlan interfaces, if required
+            if let Some(interfaces) = &self.interfaces {
+                interfaces.iter().for_each(|(ifname, iface)| {
+                    let addrs = self.addrs.as_ref().and_then(|a| a.get(ifname));
+                    iface.setup(netns, addrs);
+                });
+            }
+
+            // 4. Apply sysctls to nodes
+            if let Some(sysctls) = &self.sysctls {
+                sysctls.iter().for_each(|(sysctl, value)| {
+                    let _ = Command::new("ip")
+                        .arg("netns")
+                        .arg("exec")
+                        .arg(netns)
+                        .arg("sysctl -w")
+                        .arg(sysctl)
+                        .arg(value)
+                        .output();
+                })
+            }
+
+            // 5. Apply execs to nodes
+            if let Some(execs) = &self.exec {
+                execs.iter().for_each(|exec| {
+                    let _ = Command::new("ip")
+                        .arg("netns")
+                        .arg("exec")
+                        .arg(netns)
+                        .arg(exec)
+                        .output();
+                });
+            }
+
+            // 6. Apply pinned to nodes
+            // TODO
+        }
+    }
 }
 
-// trait NodeExt {
+// trait NodeSetup {
 //     /// Initialize a Node.
 //     /// 1. Create the nework namespace
 //     /// 2. Initialize the loopback addresses, if any.
-//     fn init(&mut self);
+//     fn setup(&mut self);
 // }
 
 impl From<&NodesDefaults> for Node {
@@ -313,10 +450,19 @@ impl From<&NodesDefaults> for Node {
 
 // ==== Endpoint ====
 
-#[derive(Serialize, Debug, Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Endpoint {
     pub node: String,
     pub interface: String,
+}
+
+impl Serialize for Endpoint {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(format!("{}:{}", self.node, self.interface).as_str())
+    }
 }
 
 impl<'de> Deserialize<'de> for Endpoint {
