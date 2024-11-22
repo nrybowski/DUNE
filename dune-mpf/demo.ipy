@@ -1,0 +1,10 @@
+#! /usr/bin/ipython
+
+import dune
+from dune import mpf
+
+dune.init("../test.toml")
+
+mpf.add_variable("empty", [1])
+
+next(mpf.run_experiment(n_runs=1))
