@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "dune_mpf"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
 dune-core = { path = "../dune-core" }
@@ -13,6 +13,7 @@ dune-core = { path = "../dune-core" }
 serde = { version = "1.0.210", features = ["derive", "serde_derive"] }
 toml = "0.8.19"
 pyo3 = "0.23.0"
+serde_json = "1.0.133"
 
 [lints]
 workspace = true
