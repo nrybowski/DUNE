@@ -33,12 +33,12 @@ Define default values for every resource and override them case-by-case if requi
 [topology.defaults.nodes.sysctls]
 "net.ipv6.conf.default.forwarding" = "1"
 
-[topolofy.nodes.r0]
+[topology.nodes.r0]
 
-[topolofy.nodes.r1]
+[topology.nodes.r1]
 "net.ipv6.conf.default.forwarding" = "0"
 
-[topolofy.nodes.r2]
+[topology.nodes.r2]
 ```
 
 ### Templates Rendering
@@ -104,3 +104,21 @@ If the end nodes do not lie on the same server, it is represented as a VXLAN.
 ### Physical Node
 
 Physical server on which the node will be executed.
+
+## Related publications
+
+### [OFIQUIC: Leveraging QUIC in OSPF for Seamless Network Topology Changes](https://dial.uclouvain.be/pr/boreal/object/boreal%3A286860)
+
+```console
+@INPROCEEDINGS{10619718,
+  author={Rybowski, Nicolas and Pelsser, Cristel and Bonaventure, Olivier},
+  booktitle={2024 IFIP Networking Conference (IFIP Networking)}, 
+  title={OFIQUIC: Leveraging QUIC in OSPF for Seamless Network Topology Changes}, 
+  year={2024},
+  volume={},
+  number={},
+  pages={368-376},
+  keywords={Transport protocols;Network topology;Web and internet services;Routing;Birds;Routing protocols;Topology;OSPF;IS-IS;routing protocols},
+  doi={10.23919/IFIPNetworking62109.2024.10619718}}
+}
+```
