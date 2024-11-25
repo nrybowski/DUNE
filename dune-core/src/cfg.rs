@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs;
-use std::net::IpAddr;
 use std::process::Command;
 use std::str::{self, FromStr};
 use std::vec::Vec;
@@ -28,7 +27,7 @@ fn expand<T: std::iter::IntoIterator<Item = U> + std::iter::Extend<U> + Clone, U
 
 // ==== Phynode ====
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Phynode {
     pub cores: Vec<Vec<u64>>,
     #[serde(default, flatten)]
@@ -41,7 +40,7 @@ impl Phynode {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Phynodes {
     pub nodes: HashMap<String, Phynode>,
     #[serde(default, flatten)]
@@ -536,4 +535,209 @@ pub struct Topology {
     pub defaults: Defaults,
     pub nodes: HashMap<String, Node>,
     pub links: Vec<Link>,
+}
+
+#[cfg(test)]
+mod phynodes {
+
+    use super::*;
+
+    #[test]
+    fn phynode_ser() {
+        let phynode = Phynode {
+            cores: vec![vec![1, 2, 3], vec![4, 5]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let serialized = toml::to_string(&phynode).expect("Serialization failed");
+        let expected = "cores = [[1, 2, 3], [4, 5]]\n";
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn phynode_de() {
+        let expected = Phynode {
+            cores: vec![vec![1, 2, 3], vec![4, 5]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let cfg = "cores = [[1, 2, 3], [4, 5]]";
+
+        let deserialized: Phynode = toml::de::from_str(&cfg).expect("Deserialization failed");
+        assert_eq!(deserialized, expected);
+    }
+
+    #[test]
+    fn phynode_ser_additional_fields() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "extra_field".to_string(),
+            toml::Value::String("some_value".to_string()),
+        );
+
+        let phynode = Phynode {
+            cores: vec![vec![1, 2], vec![3, 4]],
+            _additional_fields: Some(additional_fields),
+        };
+
+        let serialized = toml::to_string(&phynode).expect("Serialization failed");
+        let expected = "cores = [[1, 2], [3, 4]]\nextra_field = \"some_value\"\n";
+
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn phynode_de_additional_fields() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "extra_field".to_string(),
+            toml::Value::String("some_value".to_string()),
+        );
+
+        let expected = Phynode {
+            cores: vec![vec![1, 2], vec![3, 4]],
+            _additional_fields: Some(additional_fields),
+        };
+
+        let cfg = "cores = [[1, 2], [3, 4]]\nextra_field = \"some_value\"";
+
+        let deserialized: Phynode = toml::de::from_str(&cfg).expect("Deserialization failed");
+        assert_eq!(deserialized, expected);
+    }
+
+    #[test]
+    fn phynode_ser_default() {
+        let phynode = Phynode {
+            cores: Vec::new(),
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let serialized = toml::to_string(&phynode).expect("Serialization failed");
+        let expected = "cores = []\n";
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn phynode_de_default() {
+        let expected = Phynode {
+            cores: Vec::new(),
+            _additional_fields: Some(HashMap::new()),
+        };
+        let cfg = "cores = []\n";
+
+        let deserialized: Phynode = toml::de::from_str(&cfg).expect("Deserialization failed");
+        assert_eq!(deserialized, expected);
+    }
+
+    #[test]
+    fn phynodes_ser() {
+        let phynode1 = Phynode {
+            cores: vec![vec![1, 2], vec![3, 4]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let phynode2 = Phynode {
+            cores: vec![vec![5, 6], vec![7, 8]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let mut nodes = HashMap::new();
+        nodes.insert("node1".to_string(), phynode1);
+        nodes.insert("node2".to_string(), phynode2);
+
+        let phynodes = Phynodes {
+            nodes,
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let serialized = toml::to_string(&phynodes).expect("Serialization failed");
+        let expected1 =
+            "[nodes.node2]\ncores = [[5, 6], [7, 8]]\n\n[nodes.node1]\ncores = [[1, 2], [3, 4]]\n";
+        let expected2 =
+            "[nodes.node1]\ncores = [[1, 2], [3, 4]]\n\n[nodes.node2]\ncores = [[5, 6], [7, 8]]\n";
+        assert!(serialized == expected1 || serialized == expected2);
+    }
+
+    #[test]
+    fn phynodes_de() {
+        let phynode1 = Phynode {
+            cores: vec![vec![1, 2], vec![3, 4]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let phynode2 = Phynode {
+            cores: vec![vec![5, 6], vec![7, 8]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let mut nodes = HashMap::new();
+        nodes.insert("node1".to_string(), phynode1);
+        nodes.insert("node2".to_string(), phynode2);
+
+        let expected = Phynodes {
+            nodes,
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let cfg =
+            "[nodes.node1]\ncores = [[1, 2], [3, 4]]\n[nodes.node2]\ncores = [[5, 6], [7, 8]]\n";
+
+        let deserialized: Phynodes = toml::de::from_str(&cfg).expect("Deserialization failed");
+        assert_eq!(deserialized, expected);
+    }
+
+    #[test]
+    fn phynodes_de_additional_fields() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "extra_field".to_string(),
+            toml::Value::String("some_value".to_string()),
+        );
+
+        let phynode = Phynode {
+            cores: vec![vec![1, 2], vec![3, 4]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let mut nodes = HashMap::new();
+        nodes.insert("node1".to_string(), phynode);
+
+        let phynodes = Phynodes {
+            nodes,
+            _additional_fields: Some(additional_fields),
+        };
+
+        let cfg = "extra_field = \"some_value\"\n[nodes.node1]\ncores = [[1, 2], [3, 4]]\n";
+
+        let deserialized: Phynodes = toml::de::from_str(&cfg).expect("Deserialization failed");
+        assert_eq!(phynodes, deserialized);
+    }
+
+    #[test]
+    fn phynodes_se_additional_fields() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "extra_field".to_string(),
+            toml::Value::String("some_value".to_string()),
+        );
+
+        let phynode = Phynode {
+            cores: vec![vec![1, 2], vec![3, 4]],
+            _additional_fields: Some(HashMap::new()),
+        };
+
+        let mut nodes = HashMap::new();
+        nodes.insert("node1".to_string(), phynode);
+
+        let phynodes = Phynodes {
+            nodes,
+            _additional_fields: Some(additional_fields),
+        };
+
+        let expected = "extra_field = \"some_value\"\n\n[nodes.node1]\ncores = [[1, 2], [3, 4]]\n";
+
+        let serialized = toml::ser::to_string(&phynodes).expect("Serialized failed");
+
+        assert_eq!(serialized, expected);
+    }
 }
