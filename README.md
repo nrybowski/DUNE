@@ -1,5 +1,6 @@
 [![MIT licensed][mit-badge]][mit-url]
 ![CI Build](https://github.com/nrybowski/dune/actions/workflows/rust.yml/badge.svg)
+![Documentation](https://github.com/nrybowski/dune/actions/workflows/doc.yml/badge.svg)
 
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 [mit-url]: https://github.com/nrybowski/dune/blob/master/LICENSE

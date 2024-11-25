@@ -1,0 +1,42 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Documentation
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+  push:
+    branches: [ "main" ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  
+jobs:
+  build_doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Build documentation
+        id: build
+        run: |
+          cargo +nightly doc
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=dune_core\">" > target/doc/index.html
+      - name: Upload documentation
+        id: deploy
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+  deploy:
+    environment:
+        name: github-pages
+        url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build_doc
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
