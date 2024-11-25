@@ -4,13 +4,13 @@
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 [mit-url]: https://github.com/nrybowski/dune/blob/master/LICENSE
 
-> **WARNING**: This README is still in construction.
+> **WARNING**: This README is still heavily in construction.
 
 # Distributed Micro Network Emulation (DµNE) Framework
 
-Orchestrate your emulated networking experiments in a breeze.
+> Orchestrate your emulated networking experiments in a breeze.
 
-> Framework allowing distributed emulation of large networks with micro overhead.
+`DUNE` is a framework that simplifies the orchestration of distributed emulation of large networks with micro overhead.
 
 ## Features
 
@@ -19,7 +19,7 @@ Orchestrate your emulated networking experiments in a breeze.
 Define your physical nodes (_Phynodes_), e.g., experiment servers, and your virtual nodes (_Nodes_), e.g., routers, in a single configuration file.
 Specify the amount of core required for each emulated _Node_ and DUNE will allocate the required ressources on the _Phynodes_. 
 
-> "core_<X>" is a reserved keyword specifying that a core must be allocated.
+> "core_\<X\>" is a reserved keyword specifying that a core must be allocated.
 
 ```toml
 TODO
@@ -43,20 +43,42 @@ Define default values for every resource and override them case-by-case if requi
 
 ### Templates Rendering
 
+> TODO
+
+### Direct integration with the [`mpf`](https://github.com/mpiraux/mpf) framework
+
+At its core design, `DUNE` is able to configure and leverage `mpf` to deploy the emulated infrastructure.
+
+```python
+#! /usr/bin/ipython
+
+import dune
+from dune import mpf
+
+dune.init("topology.toml")
+
+mpf.add_variable('parallel', range(1,9))
+mpf.add_variable('zerocopy', {'': 'disabled', '-Z': 'enabled'})
+
+@mpf.run(role='server')
+def start_server(mpf_ctx):
+    %ex iperf3 -D -s -1 > /dev/null
+
+@mpf.run(role='client', delay=1)
+def start_client(mpf_ctx, parallel, zerocopy):
+    result = %ex iperf3 -f k -t 2 -P $parallel $zerocopy -c {mpf_ctx['roles']['server']['interfaces'][0]['ip']} | tail -n 3 | grep -ioE "[0-9.]+ [kmg]bits"
+    return {'goodput': result[0]}
+
+df = next(mpf.run_experiment(n_runs=1))
+```
+
 ### Software Build
+
+> SOON(TM)
 
 ## Install
 
 TODO
-
-## Quick Start
-
-DUNE requires two main files: (i) infra.yml and (ii) topo.yml.
-The first one describes the physical infrastructure used for the emulation.
-It can range from a single server to a cluster.
-The second one describes the topology to emulate.
-
-See [infra.sample.yml](infra.sample.yml) and [topo.sample.yml](topo.sample.yml) for illustration.
 
 ## Features
 - Automatically balance the virtual node on the physical infrastructure based on user constraints.
