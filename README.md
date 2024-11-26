@@ -28,30 +28,145 @@ Define your physical nodes (_Phynodes_), e.g., experiment servers, and your virt
 Specify the amount of core required for each emulated _Node_ and DUNE will allocate the required ressources on the _Phynodes_. 
 
 > "core_\<X\>" is a reserved keyword specifying that a core must be allocated.
+> "core_0" is reserved for the pinned process.
 
 ```toml
-TODO
+[infrastructure.node.my_server]
+cores = [[1, 2, 3], [4, 5, 6, 7]]
+
+[topology.nodes.r0.pinned]
+cmd = "./bird -s /tmp/{{node}}.bird.sk -c /tmp/{{node}}.bird.cfg -P /tmp/{{node}}.bird.pid &"
+environ.IO_QUIC_CORE_ID = "{{core_1}}"
 ```
 
-### Defaults and Overrides
+This simple configuration defines a _phynode_ called "my_server" exposing two NUMA cores, each embedding 4 cores.
+Core 0 is not exposed to DUNE as it is reserved for the Linux kernel.
 
-Define default values for every resource and override them case-by-case if required. 
+A _node_ named "r0" is also defined.
+This node reserves two cores, "core\_0" which is always allocated for the pinned process, and "core_1" whose value is stored in an environment variable "IO_QUIC_CORE_ID".
+
+Note the variable "node". This is a reserved keyword that will be expanded later with the node identifier, here "r0".
+
+### Statically configure your nodes and links
+
+Configure sysctls and one-shot commands on your nodes.
 
 ```toml
-[topology.defaults.nodes.sysctls]
-"net.ipv6.conf.default.forwarding" = "1"
-
 [topology.nodes.r0]
 
 [topology.nodes.r1]
-"net.ipv6.conf.default.forwarding" = "0"
+sysctls = {
+    "net.ipv6.conf.default.forwarding" = "1"
+}
+exec = [
+    "echo hello > /tmp/{{node}}.hello"
+]
 
 [topology.nodes.r2]
 ```
 
+Define the links connecting your nodes.
+
+```toml
+# Enable by default jumbo frames on each link and set latency to 5ms.
+[topology.defaults.links]
+mtu = 9500
+latency = "5ms"
+
+[topology]
+links = {
+    # Define endpoints between nodes.
+    {endpoints = ["r0:eth0", "r1:eth0"]},
+    # Override link properties, e.g., to change the MTU. 
+    {endpoints = ["r0:eth1", "r2:eth0"], mtu = 1500},
+    # Override interface properties. E.g., this setup emulates an asymetric link.
+    {endpoints = ["r1:eth1", "r2:eth1"], "r1:eth1".latency = "25ms"}
+}
+```
+
+### Defaults and Overrides
+
+Define default values for every resource and override them case-by-case if required.
+
+```toml
+# Launch BIRD on each node
+[topology.defaults.nodes.pinned]
+cmd = "./bird -s /tmp/{{node}}.bird.sk -c /tmp/{{node}}.bird.cfg -P /tmp/{{node}}.bird.pid &"
+environ.IO_QUIC_CORE_ID = "{{core_1}}"
+
+# Enable by default ipv6 forwarding on each node
+[topology.defaults.nodes.sysctls]
+"net.ipv6.conf.default.forwarding" = "1"
+
+# Define some routers
+[topology.nodes.r0]
+
+[topology.nodes.r1]
+
+[topology.nodes.r2]
+
+# Disable ipv6 forwarding on a stub node
+[topology.nodes.r4.sysctls]
+"net.ipv6.conf.default.forwarding" = "0"
+```
+
 ### Templates Rendering
 
-> TODO
+Automatically render jinja templates with user-provided variables.
+
+```console
+protocol kernel {
+  learn yes;
+    ipv6 {
+      export filter {
+        if source = RTS_OSPF then accept;
+        reject;
+      };
+    import all;
+  };
+}
+
+protocol ospf v3 {
+  debug all;
+  ecmp {{data['ecmp'] if 'ecmp' in data else 'no'}};
+  ipv6 {
+    import all;
+    export all;
+  };
+  area 0 {
+  {% for iface, iface_data in ifaces.items() %}
+    interface "{{iface}}" {
+      cost {{iface_data.metric}};
+      link lsa suppression yes;
+      hello 5;
+      type ptp;
+    };
+  {% endfor %}
+    interface "lo" {
+      stub yes;
+    };
+  };
+}
+```
+
+The previous file is a simple OSPFv3 configuration for BIRD.
+The variable "ecmp" is a user-defined variable.
+Note the "ifaces" variable containing a dictionnary of interface names and interface data as defined in the "links" section.
+
+Define the destination path of the rendered template on the corresponding _phynode_.
+
+```toml
+# Launch BIRD on each node
+[topology.defaults.nodes.templates]
+"./templates/bird.tmpl" = "/tmp/{{node}}/bird.conf"
+
+# R0 does not enable ECMP
+[topology.nodes.r0]
+
+# R1 enables ECMP
+[topology.nodes.r1]
+ecmp = "yes"
+```
 
 ### Direct integration with the [`mpf`](https://github.com/mpiraux/mpf) framework
 
@@ -93,6 +208,8 @@ df = next(mpf.run_experiment(n_runs=1))
 TODO
 
 ## Usage
+
+TODO: configuration file specification
 
 ### CLI
 
