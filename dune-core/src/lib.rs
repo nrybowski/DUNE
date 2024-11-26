@@ -1,4 +1,5 @@
 #![feature(let_chains)]
+#![doc = include_str!("../../README.md")]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;

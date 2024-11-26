@@ -15,6 +15,13 @@
 
 ## Features
 
+### Emulate everywhere
+
+You want to deploy a small topology on your laptop to quickly test a new feature of your current networked application?
+Or you want to deploy a large topology spanning on multiple servers with strict resource allocation?
+`DUNE` has your back in both cases. It exposes `Rust` and `Python` APIs to allow easy integration with your own libraries.
+You may also directly use the builtin CLI.
+
 ### Ressources Allocation
 
 Define your physical nodes (_Phynodes_), e.g., experiment servers, and your virtual nodes (_Nodes_), e.g., routers, in a single configuration file.
@@ -77,16 +84,23 @@ df = next(mpf.run_experiment(n_runs=1))
 
 > SOON(TM)
 
-## Install
+### User-defined extensions
+
+> SOON(TM)
+
+## Installation
 
 TODO
 
-## Features
-- Automatically balance the virtual node on the physical infrastructure based on user constraints.
-- (Non-)Interactively configure the physical infrastructure with netns, veth pairs and vxlans.
-- Build node's configuration files based on templates and topology data.
-- Build binaries to run on nodes based on the physical environment requirements.
-- Offer extensability in topology configuration with user-provided plugins.
+## Usage
+
+### CLI
+
+TODO
+
+### APIs
+
+TODO
 
 ## Concepts
 
