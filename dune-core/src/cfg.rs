@@ -239,6 +239,8 @@ impl Interface {
     }
 
     pub fn setup(&self, node: &NodeId, addrs: Option<&Vec<IpNetwork>>) {
+        // FIXME: Use netlink to issue all the commands below
+
         // Configure link.
         // If the peer interface is on the same node, the link is created with
         // a pair of virtual interfaces (veth).
@@ -263,6 +265,7 @@ impl Interface {
             // TODO
         }
 
+        // Add addresses to the interface, if specified
         if let Some(addrs) = addrs {
             addrs.iter().for_each(|addr| {
                 let _ = Command::new("ip")
@@ -276,6 +279,26 @@ impl Interface {
                     .output();
             });
         }
+
+        // Configure the MTU of the interface, if specified
+        if let Some(mtu) = self.mtu {
+            let _ = Command::new("ip")
+                .arg("-n")
+                .arg(node)
+                .arg("l")
+                .arg("set")
+                .arg("dev")
+                .arg(&self.name)
+                .arg("mtu")
+                .arg(mtu.to_string())
+                .output();
+        }
+
+        // Configure the maximum bandwidth of the link, if specified
+        // TODO
+
+        // Configure the latency of the link, if specified
+        // TODO
 
         // Set interface up
         let _ = Command::new("ip")
@@ -358,38 +381,15 @@ impl Node {
 
         // TODO: Log errors if any
         if let Some(netns) = &self.name {
-            // 1. Create netns
+            // 1. Create node netns
             let _ = block_on(NetworkNamespace::add(netns.clone()));
 
-            if let Some(addrs) = &self.addrs
-                && let Some(addrs) = addrs.get("lo")
-            {
-                addrs.iter().for_each(|addr| {
-                    println!("lo {}", addr.to_string());
-                    let _ = Command::new("ip")
-                        .arg("-n")
-                        .arg(netns)
-                        .arg("a")
-                        .arg("add")
-                        .arg(addr.to_string())
-                        .arg("dev")
-                        .arg("lo")
-                        .output();
-                });
-            }
+            // 2. Setup interfaces: create veth pairs or vlan interfaces, if required
+            let mut lo = Interface::default();
+            lo.name = "lo".to_string();
+            let addrs = self.addrs.as_ref().and_then(|a| a.get("lo"));
+            lo.setup(netns, addrs);
 
-            // Set interface up
-            let _ = Command::new("ip")
-                .arg("-n")
-                .arg(netns)
-                .arg("l")
-                .arg("set")
-                .arg("dev")
-                .arg("lo")
-                .arg("up")
-                .output();
-
-            // 2. Setup links: create veth pairs or vlan interfaces, if required
             if let Some(interfaces) = &self.interfaces {
                 interfaces.iter().for_each(|(ifname, iface)| {
                     let addrs = self.addrs.as_ref().and_then(|a| a.get(ifname));
@@ -397,29 +397,35 @@ impl Node {
                 });
             }
 
-            // 4. Apply sysctls to nodes
+            println!("{:#?}", self.sysctls);
+            // 3. Apply sysctls to nodes
             if let Some(sysctls) = &self.sysctls {
                 sysctls.iter().for_each(|(sysctl, value)| {
-                    let _ = Command::new("ip")
+                    let cmd = Command::new("ip")
                         .arg("netns")
                         .arg("exec")
                         .arg(netns)
-                        .arg("sysctl -w")
+                        .arg("sysctl")
+                        .arg("-w")
                         .arg(sysctl)
+                        .arg("=")
                         .arg(value)
                         .output();
+                    println!("{:#?}", cmd);
                 })
             }
 
-            // 5. Apply execs to nodes
+            println!("{:#?}", self.exec);
+            // 4. Apply execs to nodes
             if let Some(execs) = &self.exec {
                 execs.iter().for_each(|exec| {
-                    let _ = Command::new("ip")
+                    let out = Command::new("ip")
                         .arg("netns")
                         .arg("exec")
                         .arg(netns)
                         .arg(exec)
                         .output();
+                    println!("{:#?}", out);
                 });
             }
 
