@@ -144,10 +144,10 @@ pub struct NodesDefaults {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LinksDefaults {
-    pub latency: String,
-    pub metric: u64,
-    pub mtu: u32,
-    pub bw: String,
+    pub latency: Option<String>,
+    pub metric: Option<u64>,
+    pub mtu: Option<u32>,
+    pub bw: Option<String>,
     #[serde(default, flatten)]
     _additional_fields: Option<HashMap<String, toml::Value>>,
 }
@@ -159,13 +159,13 @@ pub struct Interface {
     /// Name of the Interface
     pub name: String,
     /// Latency of the Link
-    pub latency: String,
+    pub latency: Option<String>,
     /// Metric of the Interface
-    pub metric: u64,
+    pub metric: Option<u64>,
     /// Bandwidth of the Link
-    pub bandwidth: String,
+    pub bandwidth: Option<String>,
     /// MTU of the Link
-    pub mtu: u32,
+    pub mtu: Option<u32>,
     /// Index of the current Endpoint in the Endpoints list defined in the configuration
     pub idx: usize,
     /// Peer Endpoint
@@ -177,22 +177,22 @@ impl Interface {
         match name {
             "latency" => {
                 if let Some(latency) = field.as_str() {
-                    self.latency = latency.to_string();
+                    self.latency = Some(latency.to_string());
                 }
             }
             "metric" => {
                 if let Some(metric) = field.as_integer() {
-                    self.metric = metric as u64;
+                    self.metric = Some(metric as u64);
                 }
             }
             "mtu" => {
                 if let Some(mtu) = field.as_integer() {
-                    self.mtu = mtu as u32;
+                    self.mtu = Some(mtu as u32);
                 }
             }
             "bw" => {
                 if let Some(bw) = field.as_str() {
-                    self.bandwidth = bw.to_string();
+                    self.bandwidth = Some(bw.to_string());
                 }
             }
             _ => {}
