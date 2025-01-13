@@ -77,7 +77,16 @@ pub type CoreId = String;
 pub type Cores = HashMap<CoreId, u64>;
 pub type Sysctl = HashMap<String, String>;
 pub type Templates = HashMap<String, String>;
+pub type Binds = HashMap<String, String>;
 pub type Exec = Vec<String>;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DuneFile {
+    pub src: String,
+    pub dst: String,
+    pub content: Vec<u8>,
+    pub exec: bool,
+}
 
 // ==== Pinned process ====
 
@@ -135,6 +144,7 @@ pub struct Defaults {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodesDefaults {
     pub sysctls: Option<Sysctl>,
+    pub binds: Option<Binds>,
     pub templates: Option<Templates>,
     pub exec: Option<Exec>,
     pub pinned: Option<Vec<Pinned>>,
@@ -320,6 +330,7 @@ pub struct Node {
     // ==== Fields provided in the configuration ====
     pub sysctls: Option<Sysctl>,
     pub templates: Option<Templates>,
+    pub binds: Option<Vec<DuneFile>>,
     pub exec: Option<Exec>,
     pub pinned: Option<Vec<Pinned>>,
     pub addrs: Option<HashMap<String, Vec<IpNetwork>>>,
@@ -351,6 +362,7 @@ impl Node {
 
         // Explicit Node configuration overrides Defaults
         expand(&mut node.sysctls, &config.sysctls);
+        expand(&mut node.binds, &config.binds);
         expand(&mut node.templates, &config.templates);
         expand(&mut node.exec, &config.exec);
         expand(&mut node.pinned, &config.pinned);
@@ -374,6 +386,17 @@ impl Node {
 
     pub fn cores(&self) -> usize {
         self.cores.len()
+    }
+
+    pub fn dump_files(&self) {
+        if let Some(binds) = &self.binds {
+            binds.iter().for_each(|file| {
+                // TODO: create destination directory if it does not exist
+                // TODO: handle I/O errors if any.
+                let _out = fs::write(&file.dst, &file.content);
+                // TODO: handle exec permission if required.
+            });
+        }
     }
 
     pub fn setup(&self) {
@@ -431,6 +454,9 @@ impl Node {
 
             // 6. Apply pinned to nodes
             // TODO
+
+            // 7. Write binds, if any
+            self.dump_files();
         }
     }
 }
@@ -446,10 +472,35 @@ impl From<&NodesDefaults> for Node {
     fn from(dflt: &NodesDefaults) -> Self {
         let mut node = Self::default();
         node.pinned = dflt.pinned.clone();
+        // Expand binds if any
+        if let Some(binds) = &dflt.binds {
+            let expanded = binds
+                .iter()
+                .map(|(src, dst)| {
+                    let mut bind = DuneFile::from(src);
+                    bind.dst = dst.clone();
+                    bind
+                })
+                .collect::<Vec<DuneFile>>();
+            node.binds = Some(expanded);
+        }
         node.sysctls = dflt.sysctls.clone();
         node.exec = dflt.exec.clone();
         node.templates = dflt.templates.clone();
         node
+    }
+}
+
+impl From<&String> for DuneFile {
+    fn from(src: &String) -> Self {
+        // TODO: I/O errore handling
+        let content = fs::read(&src).unwrap();
+        DuneFile {
+            src: src.clone(),
+            dst: String::new(),
+            content,
+            exec: false,
+        }
     }
 }
 
