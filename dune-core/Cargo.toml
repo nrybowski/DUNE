@@ -4,12 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+core_affinity = "0.8.1"
 futures = "0.3.31"
 graphrs = "0.9.0"
 ipnetwork = "0.20.0"
-minijinja = "2.3.1"
+minijinja = { version = "2.3.1", features = ["loader"] }
+netlink-packet-route = "0.19.0"
+netns-rs = "0.1.0"
 regex = "1.11.0"
 rtnetlink = "0.14.1"
 serde = { version = "1.0.210", features = ["derive", "serde_derive"] }
 serde_ignored = "0.1.10"
 toml = "0.8.19"
+tracing = "0.1.41"
+nix = { version = "0.27.1", default-features = false, features = ["fs", "mount", "sched", "signal"] }
+tokio = { version = "1.43.0", features = ["full", "macros", "net", "rt"] }
+log = "0.4.25"
+tracing-subscriber = "0.3.19"
+tracing-appender = "0.2.3"

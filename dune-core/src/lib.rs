@@ -8,6 +8,10 @@ use cfg::{Config, Endpoint, Interface, Link, Node, Phynodes};
 // use graphrs::{Graph, GraphSpecs};
 use serde::{Deserialize, Serialize};
 
+use tracing::info;
+use tracing_appender::rolling::{self};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
+
 pub mod cfg;
 
 type NodeId = String;
@@ -42,6 +46,11 @@ pub struct Dune {
 
 impl Dune {
     pub fn init(cfg: &PathBuf) -> Self {
+        let logfile = rolling::never("/tmp", "dune.log");
+        let stdout = std::io::stdout.with_min_level(tracing::Level::TRACE);
+        tracing_subscriber::fmt()
+            .with_writer(stdout.and(logfile))
+            .init();
         let mut dune = Self::new(cfg);
         dune.allocate();
         dune
@@ -56,11 +65,21 @@ impl Dune {
         ) {
             assert!(idx == 0 || idx == 1);
             if let Some(node) = nodes.get_mut(&link.endpoints[idx].node) {
-                let iface = Interface::new(&cfg.topology.defaults.links, &link, idx);
+                let ifname = link.endpoints[idx].interface.clone();
+                let mut iface = Interface::new(&cfg.topology.defaults.links, &link, idx);
+
+                // Load interface's addresse(s), if any
+                if let Some(addrs) = &node.addrs
+                    && let Some(addrs) = addrs.get(&ifname)
+                {
+                    iface.addrs = Some(addrs.clone());
+                }
+
                 // TODO: check that interface is not defined multiple times
+                // Save interface
                 node.interfaces
                     .get_or_insert_with(HashMap::new)
-                    .insert(link.endpoints[idx].interface.clone(), iface);
+                    .insert(ifname, iface);
             }
         }
 
@@ -88,6 +107,9 @@ impl Dune {
                 load_interface(&mut nodes, link, &cfg, idx);
             })
         });
+
+        // Load Node's files, if any
+        nodes.iter_mut().for_each(|(_, node)| node.configure());
 
         Self {
             nodes,
@@ -133,11 +155,13 @@ impl Dune {
                                 .iter_mut()
                                 .find(|available| available.len() >= n)
                             {
-                                node.cores
-                                    .iter_mut()
-                                    .for_each(|(_, core)| *core = Some(available.pop().unwrap()));
-                                node.phynode = Some(name.clone());
-                                break;
+                                if let Some(cores) = &mut node.cores {
+                                    cores.iter_mut().for_each(|(_, core)| {
+                                        *core = Some(available.pop().unwrap())
+                                    });
+                                    node.phynode = Some(name.clone());
+                                    break;
+                                }
                             }
                         }
                     }
@@ -155,25 +179,21 @@ impl Dune {
     }
 
     pub fn phynode_setup(&self, phynode: NodeId) {
-        self.nodes.iter().for_each(|(name, node)| {
+        // FIXME: cleaner filter
+        self.nodes.iter().for_each(|(_name, node)| {
+            if let Some(node_phynode) = &node.phynode
+                && node_phynode == &phynode
+            {
+                node.init();
+            }
+        });
+
+        self.nodes.iter().for_each(|(_name, node)| {
             if let Some(node_phynode) = &node.phynode
                 && node_phynode == &phynode
             {
                 node.setup();
             }
-        })
+        });
     }
-
-    // fn phynode(&mut self, node_id: NodeId) -> &String {
-    //     if !self.allocated {
-    //         self.allocate();
-    //     }
-    //     &self.nodes[&node_id].phynode
-    // }
-
-    // fn phynode_exec(&self, pynode: String, step: SetupStep, cmd: String) {}
-
-    // fn node_exec(&mut self, node_id: NodeId, step: SetupStep, cmd: String) {
-    //     let phynode = self.phynode(node_id);
-    // }
 }

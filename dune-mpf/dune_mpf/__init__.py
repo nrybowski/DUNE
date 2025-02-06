@@ -1,4 +1,5 @@
 import ipyparallel
+import logging
 
 import pytoml
 import yaml
@@ -7,14 +8,18 @@ import dune_mpf
 import mpf
 
 
+FORMAT = '%(levelname)s %(name)s %(asctime)-15s %(filename)s:%(lineno)d %(message)s'
+logging.basicConfig(format=FORMAT)
+logging.getLogger().setLevel(logging.INFO)
+
 def init(path: str):
     """ Load DUNE context and configure mpf """
 
     global dune
 
-    (dune, cfg) = dune_mpf.load("../test.toml")
+    (dune, cfg) = dune_mpf.load(path)
     cfg = yaml.dump(pytoml.loads(cfg.dump()))
-    with open("/dev/shm/mpf_cfg.yml", "r+") as f:
+    with open("/dev/shm/mpf_cfg.yml", "w+") as f:
         f.write(cfg)
         f.seek(0)
         mpf.setup(f)

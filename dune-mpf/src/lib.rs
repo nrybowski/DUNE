@@ -9,6 +9,7 @@ use serde::{de::Error, Deserialize, Serialize};
 use serde_json;
 
 use dune_core::{cfg::Phynode, Dune};
+use tracing::{info, span, Level};
 
 // ==== Interface ====
 
@@ -120,23 +121,26 @@ impl TryFrom<&Dune> for Config {
                 let interfaces = if let Some(interfaces) = &node.interfaces {
                     interfaces
                         .iter()
-                        .map(|(ifname, iface)| {
-                            let peer = iface.peer.as_ref().unwrap();
-                            Interface::ExplicitInterface(ExplicitInterface {
-                                link: format!(
-                                    "{}:{}-{}:{}",
-                                    name.clone(),
-                                    ifname,
-                                    peer.node,
-                                    peer.interface
-                                ),
-                                direction: if iface.idx == 0 {
-                                    Direction::Forward
-                                } else {
-                                    Direction::Backward
-                                },
-                                name: ifname.clone(),
-                            })
+                        .filter_map(|(ifname, iface)| {
+                            if let Some(peer) = &iface.peer {
+                                Some(Interface::ExplicitInterface(ExplicitInterface {
+                                    link: format!(
+                                        "{}:{}-{}:{}",
+                                        name.clone(),
+                                        ifname,
+                                        peer.node,
+                                        peer.interface
+                                    ),
+                                    direction: if iface.idx == 0 {
+                                        Direction::Forward
+                                    } else {
+                                        Direction::Backward
+                                    },
+                                    name: ifname.clone(),
+                                }))
+                            } else {
+                                None
+                            }
                         })
                         .collect::<Vec<Interface>>()
                 } else {
@@ -198,6 +202,10 @@ impl MpfDune {
     }
 
     fn setup(&self, phynode: String) {
+        println!("here");
+        // tracing_subscriber::fmt().init();
+        let _ = span!(Level::INFO, "mpf");
+        info!("phynode <{phynode}> setup");
         self.0.phynode_setup(phynode);
     }
 

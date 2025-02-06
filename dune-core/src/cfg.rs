@@ -1,15 +1,32 @@
 use std::collections::HashMap;
-use std::fs;
+use std::io::Write;
+use std::net::{IpAddr, Ipv4Addr};
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::str::{self, FromStr};
+use std::thread;
 use std::vec::Vec;
+use std::{fs, io};
 
+use core_affinity::{self, CoreId as CaCoreId};
 use futures::executor::block_on;
 use ipnetwork::IpNetwork;
-use minijinja::Environment;
+use netns_rs::NetNs;
 use regex::Regex;
 use rtnetlink::NetworkNamespace;
+use serde::de::IntoDeserializer;
 use serde::{de::Visitor, Deserialize, Serialize, Serializer};
+use tracing::{debug, error, event, info, instrument, span, warn, Level};
+
+use minijinja::{context, path_loader, Environment};
+use netlink_packet_route::link::{
+    self,
+    LinkAttribute::{self, LinkInfo},
+    LinkFlag, State,
+};
+use nix::{self, fcntl::OFlag, sys::stat::Mode};
+use rtnetlink::{new_connection, LinkHandle};
+use tokio;
 
 use crate::NodeId;
 
@@ -30,6 +47,7 @@ fn expand<T: std::iter::IntoIterator<Item = U> + std::iter::Extend<U> + Clone, U
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Phynode {
     pub cores: Vec<Vec<u64>>,
+    pub binds: Option<Binds>,
     #[serde(default, flatten)]
     pub _additional_fields: Option<HashMap<String, toml::Value>>,
 }
@@ -77,15 +95,41 @@ pub type CoreId = String;
 pub type Cores = HashMap<CoreId, u64>;
 pub type Sysctl = HashMap<String, String>;
 pub type Templates = HashMap<String, String>;
-pub type Binds = HashMap<String, String>;
+pub type Binds = Vec<DuneFile>;
 pub type Exec = Vec<String>;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DuneFile {
     pub src: String,
     pub dst: String,
-    pub content: Vec<u8>,
+    pub content: Option<Vec<u8>>,
     pub exec: bool,
+}
+
+impl From<(String, String)> for DuneFile {
+    fn from(value: (String, String)) -> Self {
+        Self {
+            src: value.0,
+            dst: value.1,
+            content: None,
+            exec: false,
+        }
+    }
+}
+
+impl DuneFile {
+    #[instrument]
+    pub fn load(&mut self) {
+        match fs::read(&self.src) {
+            Ok(content) => {
+                self.content = Some(content);
+            }
+            Err(_e) => {
+                // TODO: handle I/O errors
+                event!(Level::ERROR, "Failed to load file <{}> content", self.src);
+            }
+        }
+    }
 }
 
 // ==== Pinned process ====
@@ -101,35 +145,81 @@ pub struct Pinned {
     pub down: Option<String>,
     /// Set of instructions launched before properly shutting down the process.
     pub pre_down: Option<Vec<String>>,
-    #[serde(skip)]
-    cores: Cores,
+    /// Set of instructions launched before starting the process.
+    pub post_up: Option<Vec<String>>,
+    // #[serde(skip)]
+    cores: Option<Cores>,
 }
 
 impl Pinned {
     /// Lazyly collect cores list required for the current process.
     pub fn cores(&mut self) -> Cores {
         let re = Regex::new("^core_\\d+$").unwrap();
-        if self.cores.len() == 0
+        if let None = self.cores
             && let Some(environ) = &self.environ
         {
-            self.cores.insert("core_0".to_string(), 0);
+            let mut cores = Cores::new();
+            cores.insert("core_0".to_string(), 0);
             let env = Environment::new();
             environ.iter().for_each(|(_var, value)| {
                 let tmpl = env.template_from_str(value).unwrap();
                 for value in tmpl.undeclared_variables(true) {
                     if let Some(_m) = re.find(&value) {
-                        self.cores
-                            .insert(value.clone(), u64::from_str(&value[5..]).unwrap());
+                        cores.insert(value.clone(), u64::from_str(&value[5..]).unwrap());
                     }
                 }
             });
+            self.cores = Some(cores);
         }
-        self.cores.clone()
+        self.cores.as_ref().unwrap().clone()
     }
 
     /// Lazyly get the number of cores required for the current process.
     pub fn n_cores(&mut self) -> usize {
         self.cores().len()
+    }
+
+    pub fn expand<T: Serialize>(&mut self, ctx: T) {
+        let env = Environment::new();
+
+        // Expand pre_down commands
+        if let Some(pre_down) = &mut self.pre_down {
+            self.pre_down = Some(
+                pre_down
+                    .iter()
+                    .filter_map(|cmd| {
+                        if let Ok(res) = env.render_str(cmd, &ctx) {
+                            Some(res)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            );
+        }
+
+        // Expand command
+        if let Ok(res) = env.render_str(&self.cmd, &ctx) {
+            self.cmd = res;
+        } else {
+            error!("Failed to expand cmd.");
+        }
+
+        // Expand post_up commands
+        if let Some(post_up) = &mut self.post_up {
+            self.post_up = Some(
+                post_up
+                    .iter()
+                    .filter_map(|cmd| {
+                        if let Ok(res) = env.render_str(cmd, &ctx) {
+                            Some(res)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            );
+        }
     }
 }
 
@@ -141,6 +231,7 @@ pub struct Defaults {
     pub nodes: Option<NodesDefaults>,
 }
 
+// FIXME: type NodeDefaults = Node;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodesDefaults {
     pub sysctls: Option<Sysctl>,
@@ -163,6 +254,21 @@ pub struct LinksDefaults {
 }
 
 // ==== Interface ====
+//
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Addr {
+    prefix: IpAddr,
+    plen: u8,
+}
+
+impl From<&IpNetwork> for Addr {
+    fn from(value: &IpNetwork) -> Self {
+        Self {
+            prefix: value.ip(),
+            plen: value.prefix(),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Interface {
@@ -180,6 +286,10 @@ pub struct Interface {
     pub idx: usize,
     /// Peer Endpoint
     pub peer: Option<Endpoint>,
+    /// Interface's addresses
+    pub addrs: Option<Vec<IpNetwork>>,
+    /// Interface's addresses for rendering context
+    pub ctx_addrs: Option<Vec<Addr>>,
 }
 
 impl Interface {
@@ -249,68 +359,111 @@ impl Interface {
     }
 
     pub fn setup(&self, node: &NodeId, addrs: Option<&Vec<IpNetwork>>) {
-        // FIXME: Use netlink to issue all the commands below
+        let _span = span!(Level::INFO, "interface", name = self.name).entered();
+        info!("Interface setup");
 
         // Configure link.
         // If the peer interface is on the same node, the link is created with
         // a pair of virtual interfaces (veth).
         // If both interfaces are not on the same phynode, create a vlan.
-        if let Some(endpoint) = &self.peer {
-            // e.g., ip l add eth0 netns r0 type veth peer name eth0 netns r1
-            let _ = Command::new("ip")
-                .arg("l")
-                .arg("add")
-                .arg(&self.name)
-                .arg("netns")
-                .arg(node)
-                .arg("type")
-                .arg("veth")
-                .arg("peer")
-                .arg("name")
-                .arg(&endpoint.interface)
-                .arg("netns")
-                .arg(&endpoint.node)
-                .output();
-        } else if &self.name != "lo" {
-            // TODO
-        }
 
-        // Add addresses to the interface, if specified
-        if let Some(addrs) = addrs {
-            addrs.iter().for_each(|addr| {
-                let _ = Command::new("ip")
-                    .arg("-n")
-                    .arg(node)
-                    .arg("a")
-                    .arg("add")
-                    .arg(addr.to_string())
-                    .arg("dev")
-                    .arg(&self.name)
-                    .output();
-            });
-        }
+        let mut open_flags = OFlag::empty();
+        open_flags.insert(OFlag::O_RDONLY);
+        open_flags.insert(OFlag::O_CLOEXEC);
 
-        // Configure the MTU of the interface, if specified
-        if let Some(mtu) = self.mtu {
-            let _ = Command::new("ip")
-                .arg("-n")
-                .arg(node)
-                .arg("l")
-                .arg("set")
-                .arg("dev")
-                .arg(&self.name)
-                .arg("mtu")
-                .arg(mtu.to_string())
-                .output();
-        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let (connection, handle, _) = new_connection().unwrap();
+            tokio::spawn(connection);
+
+            if let Ok(fd1) = nix::fcntl::open(
+                format!("/run/netns/{node}").as_str(),
+                open_flags,
+                Mode::empty(),
+            ) {
+                if let Some(endpoint) = &self.peer
+                    && let Ok(fd2) = nix::fcntl::open(
+                        format!("/run/netns/{}", endpoint.node).as_str(),
+                        open_flags,
+                        Mode::empty(),
+                    )
+                {
+                    let mut req = handle
+                        .link()
+                        .add()
+                        .veth(self.name.clone(), endpoint.interface.clone());
+                    let msg = req.message_mut();
+                    for attr in &mut msg.attributes {
+                        if let LinkInfo(info) = attr {
+                            for attr in info {
+                                if let link::LinkInfo::Data(data) = attr
+                                    && let link::InfoData::Veth(veth) = data
+                                    && let link::InfoVeth::Peer(peer) = veth
+                                {
+                                    // FIXME: Seems unsupported by the kernel
+                                    // peer.header.flags.push(LinkFlag::Up);
+                                    if let Some(mtu) = self.mtu {
+                                        peer.attributes.push(LinkAttribute::Mtu(mtu));
+                                    }
+                                    // peer.header.index = TODO
+                                    peer.attributes.push(LinkAttribute::NetNsFd(fd1));
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(mtu) = self.mtu {
+                        msg.attributes.push(LinkAttribute::Mtu(mtu));
+                    }
+                    // msg.header.index = TODO
+                    msg.attributes.push(LinkAttribute::NetNsFd(fd2));
+                    if let Err(e) = req.execute().await.map_err(|e| format!("{}", e)) {
+                        error!("{e}");
+                    }
+                } else {
+                    error!("Failed to open netns <{node}>");
+                }
+
+                // Add addresses to the interface, if specified
+                if let Some(addrs) = addrs {
+                    // let mut req =
+                    //     handle
+                    //         .address()
+                    //         .add(0, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 24);
+                    // let msg = req.message_mut();
+                    // println!("{msg:#?}");
+
+                    // FIXME: Use netlink to issue all the commands below
+                    addrs.iter().for_each(|addr| {
+                        let _ = Command::new("ip")
+                            .arg("-n")
+                            .arg(node)
+                            .arg("a")
+                            .arg("add")
+                            .arg(addr.to_string())
+                            .arg("dev")
+                            .arg(&self.name)
+                            .output();
+                    });
+                }
+            }
+        });
 
         // Configure the maximum bandwidth of the link, if specified
         // TODO
+        // https://docs.rs/rtnetlink/latest/rtnetlink/struct.QDiscNewRequest.html
 
         // Configure the latency of the link, if specified
         // TODO
+        // https://docs.rs/rtnetlink/latest/rtnetlink/struct.QDiscNewRequest.html
 
         // Set interface up
+        // FIXME: Use netlink to issue all the commands below
+        // TODO: should only up remote end of the link
         let _ = Command::new("ip")
             .arg("-n")
             .arg(node)
@@ -334,8 +487,6 @@ pub struct Node {
     pub exec: Option<Exec>,
     pub pinned: Option<Vec<Pinned>>,
     pub addrs: Option<HashMap<String, Vec<IpNetwork>>>,
-    #[serde(default, flatten)]
-    _additional_fields: Option<HashMap<String, toml::Value>>,
 
     // ==== DUNE's internal fields ====
     // Some fields should not be deserialized from the DUNE's configuration file but
@@ -344,12 +495,17 @@ pub struct Node {
     /// Node's name
     pub name: Option<String>,
     /// Mapping of core identifier and real core number
-    #[serde(skip)]
-    pub cores: HashMap<CoreId, Option<u64>>,
+    // #[serde(skip)]
+    pub cores: Option<HashMap<CoreId, Option<u64>>>,
     /// Phynode to which the current Node is attached
     pub phynode: Option<String>,
     // #[serde(skip)]
     pub interfaces: Option<HashMap<String, Interface>>,
+    // FIXME: make this cleaner by dividing Node in NodeCfg and Node and calling load() upon Node::from(NodeCfg)
+    pub tmpls: Option<Vec<DuneFile>>,
+
+    #[serde(default, flatten)]
+    _additional_fields: Option<HashMap<String, toml::Value>>,
 }
 
 impl Node {
@@ -366,53 +522,215 @@ impl Node {
         expand(&mut node.templates, &config.templates);
         expand(&mut node.exec, &config.exec);
         expand(&mut node.pinned, &config.pinned);
+        expand(&mut node._additional_fields, &config._additional_fields);
         node.addrs = config.addrs.clone();
         node.name = Some(name.clone());
+
+        // Add Loopback interface if any address has to be configured
+        let loopback = "lo".to_string();
+        if let Some(addrs) = node.addrs.as_ref().and_then(|a| a.get(&loopback)) {
+            let mut lo = Interface::default();
+            lo.name = loopback.clone();
+            lo.addrs = Some(addrs.clone());
+            node.interfaces
+                .get_or_insert_with(HashMap::new)
+                .insert(loopback, lo);
+        }
 
         // TODO: sanity check: core_id defined in a single Pinned process unless duplicate entries are explicitely allowed
         // FIXME: What happens if multiple Pinned process use undertone core_0 ?
 
         // Collect requested cores. They are currently not allocated.
         if let Some(pinned) = &mut node.pinned {
-            node.cores = pinned
-                .iter_mut()
-                .flat_map(|pinned| pinned.cores())
-                .map(|core_id| (core_id.0.clone(), None))
-                .collect();
+            node.cores = Some(
+                pinned
+                    .iter_mut()
+                    .flat_map(|pinned| pinned.cores())
+                    .map(|core_id| (core_id.0.clone(), None))
+                    .collect(),
+            );
         }
+
+        // Load files, if any
+        // node.load();
 
         node
     }
 
     pub fn cores(&self) -> usize {
-        self.cores.len()
+        if let Some(cores) = &self.cores {
+            cores.len()
+        } else {
+            0
+        }
+    }
+
+    pub fn load(&mut self) {
+        // Load Binds, if any
+        if let Some(binds) = &mut self.binds {
+            info!("Loading <{}> binds", binds.len());
+            binds.iter_mut().for_each(|bind| bind.load());
+        }
+
+        // Load and render Templates, if any
+        if let Some(templates) = &mut self.templates
+            && templates.len() > 0
+        {
+            info!("Loading <{}> templates", templates.len());
+            let mut env = Environment::new();
+            env.set_loader(path_loader("."));
+            let templates = templates
+                .iter()
+                .filter_map(|(template, path)| {
+                    if let Ok(tmpl) = env.get_template(template) {
+                        // Make IpNetworks Serializable to be used in minijinja context
+                        if let Some(ifaces) = &mut self.interfaces {
+                            ifaces.iter_mut().for_each(|(_name, iface)| {
+                                if let Some(addrs) = &iface.addrs {
+                                    iface.ctx_addrs = Some(
+                                        addrs
+                                            .iter()
+                                            .map(|addr| Addr::from(addr))
+                                            .collect::<Vec<Addr>>(),
+                                    );
+                                }
+                            });
+                        }
+                        // Render template
+                        match tmpl.render(context! {
+                            node => self.name,
+                            ifaces => self.interfaces.as_ref().unwrap(),
+                            ctx => self._additional_fields
+                        }) {
+                            Ok(rendered) => {
+                                let dst =
+                                    env.render_str(path, context! {node => self.name}).unwrap();
+                                let mut file = DuneFile::from((template.clone(), dst));
+                                file.content = Some(rendered.into());
+                                Some(file)
+                            }
+                            Err(e) => {
+                                warn!("Failed to render <{template}>: {e}");
+                                None
+                            }
+                        }
+                    } else {
+                        warn!("Failed to retrieve template <{template}>");
+                        None
+                    }
+                })
+                .collect::<Vec<DuneFile>>();
+            self.tmpls = Some(templates);
+        }
     }
 
     pub fn dump_files(&self) {
+        fn _dump_file(file: &DuneFile) {
+            match fs::File::create(&file.dst) {
+                Ok(mut f) => {
+                    if let Err(e) = f.write_all(&file.content.as_ref().unwrap()) {
+                        warn!("Failed to write <{}>: {e:#?}", file.dst);
+                        return;
+                    }
+                    info!("File <{}> written", file.dst);
+                    if file.exec
+                        && let Ok(perms) = f.metadata()
+                    {
+                        let mut perms = perms.permissions();
+                        perms.set_mode(0o744);
+                        if let Err(_e) = f.set_permissions(perms) {
+                            // TODO: handler permissions error
+                        }
+                    }
+                }
+                Err(e) => match e.kind() {
+                    // Path error, try to create parent directories if they do not exist.
+                    io::ErrorKind::NotFound => {
+                        let dst = std::path::Path::new(&file.dst);
+                        if let Some(dst_parent) = dst.parent() {
+                            if !dst_parent.is_dir() {
+                                match fs::DirBuilder::new().recursive(true).create(dst_parent) {
+                                    Ok(_) => {
+                                        _dump_file(file);
+                                    }
+                                    Err(e) => {
+                                        // FIXME: Handler the error
+                                        println!("{:#?}", e);
+                                    }
+                                }
+                            }
+                            // FIXME: The error was something else, too bad.
+                        }
+                    }
+                    _ => {
+                        // FIXME: Handler the error
+                        println!("{:#?}", e);
+                        return;
+                    }
+                },
+            }
+        }
+
+        // Dump Binds, if any
         if let Some(binds) = &self.binds {
+            info!("Dumping <{}> bind(s)", binds.len());
             binds.iter().for_each(|file| {
-                // TODO: create destination directory if it does not exist
-                // TODO: handle I/O errors if any.
-                let _out = fs::write(&file.dst, &file.content);
-                // TODO: handle exec permission if required.
+                _dump_file(file);
+            });
+        }
+
+        // Dump Templates if any
+        if let Some(templates) = &self.tmpls {
+            info!("Dumping <{}> templates(s)", templates.len());
+            templates.iter().for_each(|file| {
+                _dump_file(file);
             });
         }
     }
 
-    pub fn setup(&self) {
-        // FIXME: Use rtnetlink rather than Command calls
-
-        // TODO: Log errors if any
+    pub fn init(&self) {
         if let Some(netns) = &self.name {
-            // 1. Create node netns
             let _ = block_on(NetworkNamespace::add(netns.clone()));
+        }
+    }
+
+    pub fn configure(&mut self) {
+        let ctx = context! {
+            node => self.name,
+            ifaces => self.interfaces.as_ref().unwrap(),
+            ctx => self._additional_fields
+        };
+        self.expand(&ctx);
+        self.load();
+    }
+
+    pub fn expand<T: Serialize>(&mut self, ctx: T) {
+        // Expand pinned processes
+        if let Some(pinned) = &mut self.pinned {
+            pinned.iter_mut().for_each(|pinned| pinned.expand(&ctx))
+        }
+    }
+
+    pub fn setup(&self) {
+        let _span = span!(Level::INFO, "node", name = self.name).entered();
+        /// Must be called in the correct netns
+        fn _async_exec(exec: &String) {
+            let out = Command::new("bash").arg("-c").arg(exec).spawn();
+            debug!("{:#?}", out);
+        }
+
+        fn _sync_exec(exec: &String) {
+            let out = Command::new("bash").arg("-c").arg(exec).output();
+            debug!("{:#?}", out);
+        }
+
+        // 0. Write binds, if any
+        self.dump_files();
+
+        if let Some(netns) = &self.name {
+            let _span = span!(Level::DEBUG, "node {self.name}").entered();
 
             // 2. Setup interfaces: create veth pairs or vlan interfaces, if required
-            let mut lo = Interface::default();
-            lo.name = "lo".to_string();
-            let addrs = self.addrs.as_ref().and_then(|a| a.get("lo"));
-            lo.setup(netns, addrs);
-
             if let Some(interfaces) = &self.interfaces {
                 interfaces.iter().for_each(|(ifname, iface)| {
                     let addrs = self.addrs.as_ref().and_then(|a| a.get(ifname));
@@ -420,87 +738,86 @@ impl Node {
                 });
             }
 
-            println!("{:#?}", self.sysctls);
-            // 3. Apply sysctls to nodes
-            if let Some(sysctls) = &self.sysctls {
-                sysctls.iter().for_each(|(sysctl, value)| {
-                    let cmd = Command::new("ip")
-                        .arg("netns")
-                        .arg("exec")
-                        .arg(netns)
-                        .arg("sysctl")
-                        .arg("-w")
-                        .arg(sysctl)
-                        .arg("=")
-                        .arg(value)
-                        .output();
-                    println!("{:#?}", cmd);
-                })
-            }
+            // Enter netns
+            if let Ok(ns) = NetNs::get(netns) {
+                let _ = ns.run(|_| {
+                    // 3. Apply sysctls to nodes
+                    if let Some(sysctls) = &self.sysctls {
+                        info!("Applying <{}> sysctls.", sysctls.len());
+                        sysctls.iter().for_each(|(sysctl, value)| {
+                            let cmd = Command::new("sysctl")
+                                .arg("-w")
+                                .arg(format!("{sysctl}={value}"))
+                                .output();
+                            if let Err(e) = cmd {
+                                warn!("{e:#?}");
+                            }
+                        });
+                    }
 
-            println!("{:#?}", self.exec);
-            // 4. Apply execs to nodes
-            if let Some(execs) = &self.exec {
-                execs.iter().for_each(|exec| {
-                    let out = Command::new("ip")
-                        .arg("netns")
-                        .arg("exec")
-                        .arg(netns)
-                        .arg(exec)
-                        .output();
-                    println!("{:#?}", out);
+                    // 4. Apply execs to nodes
+                    if let Some(execs) = &self.exec {
+                        info!("Applying <{}> execs.", execs.len());
+                        execs.iter().for_each(|exec| {
+                            _sync_exec(exec);
+                        });
+                    }
+
+                    // 6. Apply pinned to nodes
+                    if let Some(pinned) = &self.pinned {
+                        info!("Applying <{}> pinned processes.", pinned.len());
+                        pinned.iter().for_each(|pinned| {
+                            if let Some(cores) = &self.cores
+                                && let Some(core_id) = cores.get("core_0")
+                            {
+                                let _ = thread::scope(|scope| {
+                                    let _ = scope
+                                        .spawn(move || {
+                                            if core_affinity::set_for_current(CaCoreId {
+                                                id: core_id.unwrap() as usize,
+                                            }) {
+                                                let mut cmd = pinned.cmd.split_whitespace();
+                                                let _out = Command::new(cmd.next().unwrap())
+                                                    .args(cmd)
+                                                    .spawn();
+                                                // _exec(&pinned.cmd);
+                                            }
+                                        })
+                                        .join();
+                                });
+
+                                let _ = thread::scope(|scope| {
+                                    // Launch post_up commands, if any.
+                                    if let Some(post_ups) = &pinned.post_up {
+                                        let _span = span!(Level::INFO, "pinned");
+                                        info!("Launching <{}> post_up commands", post_ups.len());
+                                        post_ups.iter().for_each(|post_up| {
+                                            let _ = scope
+                                                .spawn(move || {
+                                                    _sync_exec(&post_up);
+                                                })
+                                                .join();
+                                        });
+                                    }
+                                });
+                            }
+                        });
+                    }
                 });
             }
-
-            // 6. Apply pinned to nodes
-            // TODO
-
-            // 7. Write binds, if any
-            self.dump_files();
         }
     }
 }
-
-// trait NodeSetup {
-//     /// Initialize a Node.
-//     /// 1. Create the nework namespace
-//     /// 2. Initialize the loopback addresses, if any.
-//     fn setup(&mut self);
-// }
 
 impl From<&NodesDefaults> for Node {
     fn from(dflt: &NodesDefaults) -> Self {
         let mut node = Self::default();
         node.pinned = dflt.pinned.clone();
-        // Expand binds if any
-        if let Some(binds) = &dflt.binds {
-            let expanded = binds
-                .iter()
-                .map(|(src, dst)| {
-                    let mut bind = DuneFile::from(src);
-                    bind.dst = dst.clone();
-                    bind
-                })
-                .collect::<Vec<DuneFile>>();
-            node.binds = Some(expanded);
-        }
+        node.binds = dflt.binds.clone();
         node.sysctls = dflt.sysctls.clone();
         node.exec = dflt.exec.clone();
         node.templates = dflt.templates.clone();
         node
-    }
-}
-
-impl From<&String> for DuneFile {
-    fn from(src: &String) -> Self {
-        // TODO: I/O errore handling
-        let content = fs::read(&src).unwrap();
-        DuneFile {
-            src: src.clone(),
-            dst: String::new(),
-            content,
-            exec: false,
-        }
     }
 }
 
