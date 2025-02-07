@@ -225,10 +225,10 @@ impl MpfDune {
     }
 
     pub fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
-        py.run_bound("from dune_mpf import _dune_mpf as dune_mpf", None, None)
+        py.run_bound("from dune_mpf import _dune_mpf", None, None)
             .unwrap();
         let cls = py
-            .eval_bound("dune_mpf.MpfDune.deserialize", None, None)
+            .eval_bound("_dune_mpf.MpfDune.deserialize", None, None)
             .unwrap();
         let data = PyBytes::new(py, &serde_json::to_vec(&self).unwrap()).to_object(py);
         Ok((cls.to_object(py), (data,).to_object(py)))
