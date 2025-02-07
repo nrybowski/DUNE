@@ -191,7 +191,7 @@ impl Config {
 
 // ==== Python FFI ====
 
-#[pyclass(module = "dune_mpf")]
+#[pyclass(module = "_dune_mpf")]
 #[derive(Serialize, Deserialize)]
 struct MpfDune(Dune);
 
@@ -225,7 +225,8 @@ impl MpfDune {
     }
 
     pub fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
-        py.run_bound("import dune_mpf", None, None).unwrap();
+        py.run_bound("from dune_mpf import _dune_mpf as dune_mpf", None, None)
+            .unwrap();
         let cls = py
             .eval_bound("dune_mpf.MpfDune.deserialize", None, None)
             .unwrap();
@@ -252,7 +253,7 @@ fn load(cfg: PathBuf) -> (MpfDune, MpfConfig) {
 }
 
 #[pymodule]
-fn dune_mpf(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _dune_mpf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_class::<MpfDune>()?;
     m.add_class::<MpfConfig>()?;

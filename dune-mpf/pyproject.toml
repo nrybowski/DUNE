@@ -8,5 +8,5 @@ build-backend = "maturin"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-python-source = "python"
+module-name = "dune_mpf._dune_mpf"
 name = "dune"
