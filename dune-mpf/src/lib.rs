@@ -202,8 +202,6 @@ impl MpfDune {
     }
 
     fn setup(&self, phynode: String) {
-        println!("here");
-        // tracing_subscriber::fmt().init();
         let _ = span!(Level::INFO, "mpf");
         info!("phynode <{phynode}> setup");
         self.0.phynode_setup(phynode);

@@ -4,7 +4,7 @@ import logging
 import pytoml
 import yaml
 
-from dune_mpf import _dune_mpf as dune_mpf
+from dune_mpf import _dune_mpf
 import mpf
 
 
@@ -34,7 +34,7 @@ def setup():
 
     # Import DUNE module on every phynode
     with mpf.client[:].sync_imports(quiet=False):
-        from dune_mpf import _dune_mpf as dune_mpf
+        from dune_mpf import _dune_mpf
 
     # Send DUNE context to every phynode
     mpf.client[:].push({'dune': dune})
