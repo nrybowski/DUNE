@@ -1,6 +1,11 @@
 [project]
 name = "dune"
 version = "0.1.0"
+dependencies = [
+  "mpf @ git+https://github.com/mpiraux/mpf",
+  "pytoml",
+  "pyyaml"
+]
 
 [build-system]
 requires = ["setuptools >= 61.0"]

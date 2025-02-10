@@ -1,11 +1,5 @@
 [project]
 name = "dune_mpf"
-dependencies = [
-  # "dune @ file:///${PROJECT_ROOT}/python",
-  "mpf @ git+https://github.com/mpiraux/mpf",
-  "pytoml",
-  "pyyaml"
-]
 dynamic = ["version"]
 
 [build-system]
