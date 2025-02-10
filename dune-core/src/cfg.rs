@@ -791,20 +791,20 @@ impl Node {
                                         .join();
                                 });
 
-                                let _ = thread::scope(|scope| {
-                                    // Launch post_up commands, if any.
-                                    if let Some(post_ups) = &pinned.post_up {
-                                        let _span = span!(Level::INFO, "pinned");
-                                        info!("Launching <{}> post_up commands", post_ups.len());
-                                        post_ups.iter().for_each(|post_up| {
+                                // Launch post_up commands, if any.
+                                if let Some(post_ups) = &pinned.post_up {
+                                    let _span = span!(Level::INFO, "pinned");
+                                    info!("Launching <{}> post_up commands", post_ups.len());
+                                    post_ups.iter().for_each(|post_up| {
+                                        let _ = thread::scope(|scope| {
                                             let _ = scope
                                                 .spawn(move || {
-                                                    _sync_exec(&post_up);
+                                                    _async_exec(&post_up);
                                                 })
                                                 .join();
                                         });
-                                    }
-                                });
+                                    });
+                                }
                             }
                         });
                     }
