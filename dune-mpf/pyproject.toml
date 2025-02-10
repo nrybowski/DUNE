@@ -1,3 +1,13 @@
+[project]
+name = "dune_mpf"
+dependencies = [
+  # "dune @ file:///${PROJECT_ROOT}/python",
+  "mpf @ git+https://github.com/mpiraux/mpf",
+  "pytoml",
+  "pyyaml"
+]
+dynamic = ["version"]
+
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
@@ -5,7 +15,4 @@ build-backend = "maturin"
 [tool.maturin]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 features = ["pyo3/extension-module"]
-# target = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
-# [tool.maturin.target]
-# arch = "aarch64"
-
+python-source = "python"

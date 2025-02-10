@@ -8,10 +8,6 @@ import dune_mpf
 import mpf
 
 
-FORMAT = '%(levelname)s %(name)s %(asctime)-15s %(filename)s:%(lineno)d %(message)s'
-logging.basicConfig(format=FORMAT)
-logging.getLogger().setLevel(logging.INFO)
-
 def init(path: str):
     """ Load DUNE context and configure mpf """
 
@@ -23,9 +19,9 @@ def init(path: str):
         f.write(cfg)
         f.seek(0)
         mpf.setup(f)
-    setup()
+    deploy()
 
-def setup():
+def deploy():
     """ Deploy synchronously the experimental setup. """
     
     global dune
