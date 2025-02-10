@@ -155,20 +155,22 @@ impl Pinned {
     /// Lazyly collect cores list required for the current process.
     pub fn cores(&mut self) -> Cores {
         let re = Regex::new("^core_\\d+$").unwrap();
-        if let None = self.cores
-            && let Some(environ) = &self.environ
-        {
+        if let None = self.cores {
             let mut cores = Cores::new();
             cores.insert("core_0".to_string(), 0);
-            let env = Environment::new();
-            environ.iter().for_each(|(_var, value)| {
-                let tmpl = env.template_from_str(value).unwrap();
-                for value in tmpl.undeclared_variables(true) {
-                    if let Some(_m) = re.find(&value) {
-                        cores.insert(value.clone(), u64::from_str(&value[5..]).unwrap());
+
+            if let Some(environ) = &self.environ {
+                let env = Environment::new();
+                environ.iter().for_each(|(_var, value)| {
+                    let tmpl = env.template_from_str(value).unwrap();
+                    for value in tmpl.undeclared_variables(true) {
+                        if let Some(_m) = re.find(&value) {
+                            cores.insert(value.clone(), u64::from_str(&value[5..]).unwrap());
+                        }
                     }
-                }
-            });
+                });
+            }
+
             self.cores = Some(cores);
         }
         self.cores.as_ref().unwrap().clone()
@@ -690,15 +692,18 @@ impl Node {
 
     pub fn init(&self) {
         if let Some(netns) = &self.name {
-            let _ = block_on(NetworkNamespace::add(netns.clone()));
+            info!("Adding netns <{netns}>");
+            if let Err(e) = block_on(NetworkNamespace::add(netns.clone())) {
+                warn!("Failed to add netns <{netns}>: {e}");
+            }
         }
     }
 
     pub fn configure(&mut self) {
         let ctx = context! {
-            node => self.name,
-            ifaces => self.interfaces.as_ref().unwrap(),
-            ctx => self._additional_fields
+        node => self.name,
+        ifaces => self.interfaces.as_ref().unwrap(),
+        ctx => self._additional_fields
         };
         self.expand(&ctx);
         self.load();
