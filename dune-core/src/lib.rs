@@ -4,11 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
-use cfg::{Config, Endpoint, Interface, Link, Node, Phynodes};
+use cfg::{Config, Interface, Link, Node, Phynodes};
 // use graphrs::{Graph, GraphSpecs};
 use serde::{Deserialize, Serialize};
 
-use tracing::info;
+use tracing::{info, span, warn, Level};
 use tracing_appender::rolling::{self};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -51,9 +51,19 @@ impl Dune {
         tracing_subscriber::fmt()
             .with_writer(stdout.and(logfile))
             .init();
+        info!("Tracing and logging enabled!");
         let mut dune = Self::new(cfg);
+        dune.stats();
         dune.allocate();
         dune
+    }
+
+    pub fn stats(&self) {
+        info!(
+            "Collected <{}> nodes on <{}> phynodes",
+            self.nodes.len(),
+            self.infra.nodes.len()
+        );
     }
 
     pub fn new(cfg: &PathBuf) -> Self {
@@ -121,6 +131,7 @@ impl Dune {
 
     /// Allocate requested cores to physical cores, if possible given the provided infrastructure.
     pub fn allocate(&mut self) {
+        // FIXME: Detect  and report unallocated nodes
         if !self.allocated {
             self.allocated = true;
             // Sort nodes by decreasing number of cores to allocate
@@ -179,21 +190,32 @@ impl Dune {
     }
 
     pub fn phynode_setup(&self, phynode: NodeId) {
+        let _span = span!(Level::INFO, "phynode", name = phynode).entered();
         // FIXME: cleaner filter
-        self.nodes.iter().for_each(|(_name, node)| {
-            if let Some(node_phynode) = &node.phynode
-                && node_phynode == &phynode
-            {
-                node.init();
-            }
-        });
 
-        self.nodes.iter().for_each(|(_name, node)| {
-            if let Some(node_phynode) = &node.phynode
-                && node_phynode == &phynode
-            {
-                node.setup();
-            }
-        });
+        info!("Filtering nodes for current phynode.");
+
+        let nodes = self
+            .nodes
+            .iter()
+            .filter_map(|(name, node)| {
+                if let Some(node_phynode) = &node.phynode
+                    && node_phynode == &phynode
+                {
+                    Some(node)
+                } else {
+                    warn!(
+                        "Skipped node <{name}>: registered phynode <{:#?}>\n{node:#?}",
+                        node.phynode
+                    );
+                    None
+                }
+            })
+            .collect::<Vec<&Node>>();
+
+        info!("Got <{}> nodes to install on <{phynode}>", nodes.len());
+
+        nodes.iter().for_each(|node| node.init());
+        nodes.iter().for_each(|node| node.setup());
     }
 }
