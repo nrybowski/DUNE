@@ -215,7 +215,14 @@ impl Dune {
 
         info!("Got <{}> nodes to install on <{phynode}>", nodes.len());
 
+        // Instanciate nodes
+        let span = span!(Level::INFO, "nodes").entered();
         nodes.iter().for_each(|node| node.init());
+        span.exit();
+
+        // Configure interfaces
+        let span = span!(Level::INFO, "interfaces").entered();
         nodes.iter().for_each(|node| node.setup());
+        span.exit();
     }
 }
