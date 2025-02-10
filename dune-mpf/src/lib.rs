@@ -11,6 +11,9 @@ use serde_json;
 use dune_core::{cfg::Phynode, Dune};
 use tracing::{info, span, Level};
 
+use tracing_appender::rolling::{self};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
+
 // ==== Interface ====
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -203,6 +206,11 @@ impl MpfDune {
 
     fn setup(&self, phynode: String) {
         println!("here");
+        let logfile = rolling::never("/tmp", "dune.log");
+        let stdout = std::io::stdout.with_min_level(tracing::Level::TRACE);
+        tracing_subscriber::fmt()
+            .with_writer(stdout.and(logfile))
+            .init();
         // tracing_subscriber::fmt().init();
         let _ = span!(Level::INFO, "mpf");
         info!("phynode <{phynode}> setup");
