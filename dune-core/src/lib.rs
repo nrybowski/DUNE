@@ -76,7 +76,10 @@ impl Dune {
             assert!(idx == 0 || idx == 1);
             if let Some(node) = nodes.get_mut(&link.endpoints[idx].node) {
                 let ifname = link.endpoints[idx].interface.clone();
-                let mut iface = Interface::new(&cfg.topology.defaults.links, &link, idx);
+                let interfaces = node.interfaces.get_or_insert_with(HashMap::new);
+                let ifindex = interfaces.len() + 2;
+                let mut iface =
+                    Interface::new(&cfg.topology.defaults.links, &link, idx, ifindex as u32);
 
                 // Load interface's addresse(s), if any
                 if let Some(addrs) = &node.addrs
@@ -85,11 +88,8 @@ impl Dune {
                     iface.addrs = Some(addrs.clone());
                 }
 
-                // TODO: check that interface is not defined multiple times
-                // Save interface
-                node.interfaces
-                    .get_or_insert_with(HashMap::new)
-                    .insert(ifname, iface);
+                // Only insert the interface if it is not already defined to avoid duplicates
+                interfaces.entry(ifname).or_insert(iface);
             }
         }
 
@@ -216,12 +216,12 @@ impl Dune {
         info!("Got <{}> nodes to install on <{phynode}>", nodes.len());
 
         // Instanciate nodes
-        let span = span!(Level::INFO, "nodes").entered();
+        let span = span!(Level::INFO, "step", name = "nodes").entered();
         nodes.iter().for_each(|node| node.init());
         span.exit();
 
         // Configure interfaces
-        let span = span!(Level::INFO, "interfaces").entered();
+        let span = span!(Level::INFO, "step", name = "interfaces").entered();
         nodes.iter().for_each(|node| node.setup());
         span.exit();
     }

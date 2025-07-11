@@ -10,8 +10,11 @@ use std::{fs, io};
 
 use core_affinity::{self, CoreId as CaCoreId};
 use futures::executor::block_on;
+use futures::future::Inspect;
+use futures::AsyncWriteExt;
 use ipnetwork::IpNetwork;
 use netns_rs::NetNs;
+use nix::NixPath;
 use regex::Regex;
 use rtnetlink::NetworkNamespace;
 use serde::de::IntoDeserializer;
@@ -284,6 +287,8 @@ pub struct Interface {
     pub bandwidth: Option<String>,
     /// MTU of the Link
     pub mtu: Option<u32>,
+    /// MAC address of the interface
+    pub mac: Option<Vec<u8>>,
     /// Index of the current Endpoint in the Endpoints list defined in the configuration
     pub idx: usize,
     /// Peer Endpoint
@@ -292,6 +297,10 @@ pub struct Interface {
     pub addrs: Option<Vec<IpNetwork>>,
     /// Interface's addresses for rendering context
     pub ctx_addrs: Option<Vec<Addr>>,
+    /// Interface's MAC addresse for rendering context
+    pub ctx_mac: Option<String>,
+    //// Interface index
+    pub ifindex: u32,
 }
 
 impl Interface {
@@ -317,11 +326,38 @@ impl Interface {
                     self.bandwidth = Some(bw.to_string());
                 }
             }
+            "mac" => {
+                if let Some(mac) = field.as_str() {
+                    // Ugly cast from textual byte representation to actual bytes
+                    let mac = mac
+                        .chars()
+                        .filter_map(|e| {
+                            if e != ':'
+                                && let Some(digit) = e.to_digit(16)
+                            {
+                                Some(digit as u8)
+                            } else {
+                                None
+                            }
+                        })
+                        .enumerate()
+                        .fold(Vec::new(), |mut acc, (idx, x)| {
+                            if idx & 1 == 1 {
+                                let byte = (acc.pop().unwrap() << 4 | x as u8) as u8;
+                                acc.push(byte);
+                            } else {
+                                acc.push(x);
+                            }
+                            acc
+                        });
+                    self.mac = Some(mac);
+                }
+            }
             _ => {}
         }
     }
 
-    pub fn new(dflt: &Option<LinksDefaults>, config: &Link, idx: usize) -> Self {
+    pub fn new(dflt: &Option<LinksDefaults>, config: &Link, idx: usize, ifindex: u32) -> Self {
         assert!(idx == 0 || idx == 1, "Index should be 0 or 1");
 
         // Expand Endpoint configuration from Defaults
@@ -332,18 +368,19 @@ impl Interface {
 
         let name = &config.endpoints[idx].interface;
 
-        // Override default values if any specified
+        // Override default values, if any specified
         config._additional_fields.iter().for_each(|(idx, field)| {
             let idx = idx.as_str();
-            if let Some(endpoint) = Endpoint::try_from(idx).ok()
+            if let Ok(endpoint) = Endpoint::try_from(idx)
                 && &endpoint.interface == name
             {
                 if let Some(table) = field.as_table() {
                     table.iter().for_each(|(idx, field)| {
-                        // Latency and MTU are bidirectionnal and should not be modified
-                        // TODO: log warning
-                        if idx != "latency" && idx != "mtu" {
+                        // MTU is bidirectionnal and should not be modified
+                        if idx != "mtu" {
                             iface.set_from_field(idx, field);
+                        } else {
+                            warn!("Skipped unidirectionnal MTU setup.");
                         }
                     })
                 }
@@ -356,6 +393,7 @@ impl Interface {
         iface.name = name.clone();
         iface.peer = Some(config.endpoints[1 - idx].clone());
         iface.idx = idx;
+        iface.ifindex = ifindex;
 
         iface
     }
@@ -409,9 +447,16 @@ impl Interface {
                                     // FIXME: Seems unsupported by the kernel
                                     // peer.header.flags.push(LinkFlag::Up);
                                     if let Some(mtu) = self.mtu {
+                                        info!("Setting MTU <{mtu}>");
                                         peer.attributes.push(LinkAttribute::Mtu(mtu));
                                     }
-                                    // peer.header.index = TODO
+                                    info!("MAC: <{:x?}>", self.mac);
+                                    if let Some(mac) = &self.mac {
+                                        info!("Setting MAC address <{:x?}>", self.mac);
+                                        peer.attributes.push(LinkAttribute::Address(mac.clone()));
+                                    }
+                                    info!("Setting ifindex <{}>", self.ifindex);
+                                    peer.header.index = self.ifindex;
                                     peer.attributes.push(LinkAttribute::NetNsFd(fd1));
                                 }
                             }
@@ -419,15 +464,35 @@ impl Interface {
                     }
 
                     if let Some(mtu) = self.mtu {
+                        info!("Setting peer MTU <{mtu}>");
                         msg.attributes.push(LinkAttribute::Mtu(mtu));
                     }
-                    // msg.header.index = TODO
+
+                    info!("{:#?}", self.peer);
+
+                    // if let Some(mac) = remote_mac {
+                    // info!("Setting peer MAC <{mac:x?}>");
+                    // msg.attributes.push(LinkAttribute::Address(mac));
+                    // }
+                    // msg.header.index = ifindex;
                     msg.attributes.push(LinkAttribute::NetNsFd(fd2));
                     if let Err(e) = req.execute().await.map_err(|e| format!("{}", e)) {
                         error!("{e}");
                     }
+
+                    // Set MAC address (if any) and interface up
+                    // let mut req = handle.link().set(self.ifindex.unwrap() as u32);
+                    // let msg = req.message_mut();
+                    // }
+                    // msg.header.flags.push(LinkFlag::Up);
+
+                    // if let Err(e) = req.execute().await.map_err(|e| format!("{}", e)) {
+                    // warn!("{e}");
+                    // }
+                } else if self.name == "lo" {
+                    // Nothing to do, just skip error message
                 } else {
-                    error!("Failed to open netns <{node}>");
+                    warn!("Failed to open peer netns");
                 }
 
                 // Add addresses to the interface, if specified
@@ -452,8 +517,55 @@ impl Interface {
                             .output();
                     });
                 }
+
+                // info!("Spawning thread for interface configuration");
+                // let _ = thread::scope(|scope| {
+                //     let _ = scope
+                //         .spawn(move || {
+                //             if let Ok(ns) = NetNs::get(node) {
+                //                 if let Ok(_) = ns.enter() {
+                //                     // Set MAC address if specified
+                //                     block_on(async {
+                //                         if let Some(mac) = &self.mac {
+                //                             info!("Setting MAC <{mac:x?}>");
+                //                             if let Err(e) = handle
+                //                                 .link()
+                //                                 .set(self.ifindex)
+                //                                 .address(mac.clone())
+                //                                 .execute()
+                //                                 .await
+                //                                 .map_err(|e| format!("{}", e))
+                //                             {
+                //                                 warn!("{e}");
+                //                             }
+                //                         }
+                //                     })
+
+                //                     // Set interface up
+                //                     // if let Err(e) = handle
+                //                     //     .link()
+                //                     //     .set(self.ifindex)
+                //                     //     .up()
+                //                     //     .execute()
+                //                     //     .await
+                //                     //     .map_err(|e| format!("{}", e))
+                //                     // {
+                //                     //     warn!("{e}");
+                //                     // }
+                //                     // })
+                //                     // });
+                //                 } else {
+                //                     error!("Failde to enter <{node}> netns.");
+                //                 }
+                //             } else {
+                //                 error!("Failed to open <{node}> netns to configure interfaces.");
+                //             }
+                //         })
+                //         .join();
+                // });
             }
         });
+        // });
 
         // Configure the maximum bandwidth of the link, if specified
         // TODO
@@ -462,6 +574,34 @@ impl Interface {
         // Configure the latency of the link, if specified
         // TODO
         // https://docs.rs/rtnetlink/latest/rtnetlink/struct.QDiscNewRequest.html
+        //
+        // FIXME: use netlink only
+        info!("Mac {:x?}", self.mac);
+        if let Some(mac) = &self.mac {
+            let mut cmd = Command::new("ip");
+            cmd.arg("-n")
+                .arg(node)
+                .arg("l")
+                .arg("set")
+                .arg("dev")
+                .arg(&self.name)
+                .arg("address")
+                .arg({
+                    let last = mac.len() - 1;
+                    mac.iter()
+                        .enumerate()
+                        .fold(String::new(), |mut acc, (idx, byte)| {
+                            let formatted =
+                                format!("{byte:x}{}", if idx == last { "" } else { ":" });
+                            acc.push_str(&formatted);
+                            acc
+                        })
+                });
+            info!("Setting MAC <{cmd:#?}>");
+            if let Err(e) = cmd.output() {
+                warn!("{e:#?}");
+            }
+        }
 
         // Set interface up
         // FIXME: Use netlink to issue all the commands below
@@ -475,6 +615,24 @@ impl Interface {
             .arg(&self.name)
             .arg("up")
             .output();
+
+        if let Some(latency) = &self.latency {
+            // tc qdisc add dev eth2 root netem delay 1ms
+            let _ = Command::new("ip")
+                .arg("netns")
+                .arg("exec")
+                .arg(node)
+                .arg("tc")
+                .arg("qdisc")
+                .arg("add")
+                .arg("dev")
+                .arg(self.name.clone())
+                .arg("root")
+                .arg("netem")
+                .arg("delay")
+                .arg(latency)
+                .output();
+        }
     }
 }
 
@@ -587,6 +745,8 @@ impl Node {
                     if let Ok(tmpl) = env.get_template(template) {
                         // Make IpNetworks Serializable to be used in minijinja context
                         if let Some(ifaces) = &mut self.interfaces {
+                            // FIXME: Use custom accessor abstracting such operations rather than encoding more info in the structure
+                            // see: https://github.com/mitsuhiko/minijinja/discussions/338
                             ifaces.iter_mut().for_each(|(_name, iface)| {
                                 if let Some(addrs) = &iface.addrs {
                                     iface.ctx_addrs = Some(
@@ -595,6 +755,21 @@ impl Node {
                                             .map(|addr| Addr::from(addr))
                                             .collect::<Vec<Addr>>(),
                                     );
+                                }
+                                if let Some(mac) = &iface.mac {
+                                    let last = mac.len() - 1;
+                                    let mac = mac.iter().enumerate().fold(
+                                        String::new(),
+                                        |mut acc, (idx, byte)| {
+                                            let formatted = format!(
+                                                "{byte:x}{}",
+                                                if idx == last { "" } else { ":" }
+                                            );
+                                            acc.push_str(&formatted);
+                                            acc
+                                        },
+                                    );
+                                    iface.ctx_mac = Some(mac);
                                 }
                             });
                         }
