@@ -16,7 +16,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@nightly
+    # - uses: dtolnay/rust-toolchain@nightly
+    - name: Set toolchain version
+      run: rustup override set 1.88
     - name: Build crate
       run: cargo build
     - name: Run tests

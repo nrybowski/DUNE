@@ -1,15 +1,13 @@
-#![feature(let_chains)]
-
 use std::net::IpAddr;
 use std::{collections::HashMap, path::PathBuf};
 
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
-use serde::{de::Error, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Error};
 use serde_json;
 
-use dune_core::{cfg::Phynode, Dune};
-use tracing::{info, span, Level};
+use dune_core::{Dune, cfg::Phynode};
+use tracing::{Level, info, span};
 
 use tracing_appender::rolling::{self};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -104,7 +102,7 @@ pub struct Config {
 impl TryFrom<&PathBuf> for Config {
     type Error = ();
     fn try_from(cfg: &PathBuf) -> Result<Self, Self::Error> {
-        let mut dune = Dune::new(cfg);
+        let dune = Dune::new(cfg);
         Self::try_from(&dune).map_err(|_err| ())
     }
 }

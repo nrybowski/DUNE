@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::str::{self, FromStr};
@@ -9,26 +9,21 @@ use std::vec::Vec;
 use std::{fs, io};
 
 use futures::executor::block_on;
-use futures::future::Inspect;
-use futures::AsyncWriteExt;
 use ipnetwork::IpNetwork;
 use netns_rs::NetNs;
-use nix::NixPath;
 use regex::Regex;
 use rtnetlink::NetworkNamespace;
-use serde::de::IntoDeserializer;
-use serde::{de::Visitor, Deserialize, Serialize, Serializer};
-use tracing::{debug, error, event, info, instrument, span, warn, Level};
+use serde::{Deserialize, Serialize, Serializer, de::Visitor};
+use tracing::{Level, debug, error, event, info, instrument, span, warn};
 
 use affinity;
-use minijinja::{context, path_loader, Environment};
+use minijinja::{Environment, context, path_loader};
 use netlink_packet_route::link::{
     self,
     LinkAttribute::{self, LinkInfo},
-    LinkFlag, State,
 };
 use nix::{self, fcntl::OFlag, sys::stat::Mode};
-use rtnetlink::{new_connection, LinkHandle};
+use rtnetlink::new_connection;
 use tokio;
 
 use crate::NodeId;
@@ -938,12 +933,12 @@ impl Node {
                     // 6. Apply pinned to nodes
                     if let Some(pinned) = &self.pinned {
                         info!("Applying <{}> pinned processes.", pinned.len());
-                        pinned.iter().enumerate().for_each(|(idx, pinned)| {
+                        pinned.iter().enumerate().for_each(|(_idx, pinned)| {
                             if let Some(cores) = &pinned.cores {
                                 // Spawn the Pinned process in a separate thread to allow core pinning.
                                 let ids = cores
                                     .iter()
-                                    .map(|(id, core)| *core as usize)
+                                    .map(|(_id, core)| *core as usize)
                                     .collect::<Vec<usize>>();
                                 let _ = thread::scope(|scope| {
                                     let _ = scope
@@ -1099,6 +1094,7 @@ mod phynodes {
     #[test]
     fn phynode_ser() {
         let phynode = Phynode {
+            binds: None,
             cores: vec![vec![1, 2, 3], vec![4, 5]],
             _additional_fields: Some(HashMap::new()),
         };
@@ -1111,6 +1107,7 @@ mod phynodes {
     #[test]
     fn phynode_de() {
         let expected = Phynode {
+            binds: None,
             cores: vec![vec![1, 2, 3], vec![4, 5]],
             _additional_fields: Some(HashMap::new()),
         };
@@ -1130,6 +1127,7 @@ mod phynodes {
         );
 
         let phynode = Phynode {
+            binds: None,
             cores: vec![vec![1, 2], vec![3, 4]],
             _additional_fields: Some(additional_fields),
         };
@@ -1149,6 +1147,7 @@ mod phynodes {
         );
 
         let expected = Phynode {
+            binds: None,
             cores: vec![vec![1, 2], vec![3, 4]],
             _additional_fields: Some(additional_fields),
         };
@@ -1162,6 +1161,7 @@ mod phynodes {
     #[test]
     fn phynode_ser_default() {
         let phynode = Phynode {
+            binds: None,
             cores: Vec::new(),
             _additional_fields: Some(HashMap::new()),
         };
@@ -1174,6 +1174,7 @@ mod phynodes {
     #[test]
     fn phynode_de_default() {
         let expected = Phynode {
+            binds: None,
             cores: Vec::new(),
             _additional_fields: Some(HashMap::new()),
         };
@@ -1186,12 +1187,14 @@ mod phynodes {
     #[test]
     fn phynodes_ser() {
         let phynode1 = Phynode {
+            binds: None,
             cores: vec![vec![1, 2], vec![3, 4]],
             _additional_fields: Some(HashMap::new()),
         };
 
         let phynode2 = Phynode {
             cores: vec![vec![5, 6], vec![7, 8]],
+            binds: None,
             _additional_fields: Some(HashMap::new()),
         };
 
@@ -1215,11 +1218,13 @@ mod phynodes {
     #[test]
     fn phynodes_de() {
         let phynode1 = Phynode {
+            binds: None,
             cores: vec![vec![1, 2], vec![3, 4]],
             _additional_fields: Some(HashMap::new()),
         };
 
         let phynode2 = Phynode {
+            binds: None,
             cores: vec![vec![5, 6], vec![7, 8]],
             _additional_fields: Some(HashMap::new()),
         };
@@ -1249,6 +1254,7 @@ mod phynodes {
         );
 
         let phynode = Phynode {
+            binds: None,
             cores: vec![vec![1, 2], vec![3, 4]],
             _additional_fields: Some(HashMap::new()),
         };
@@ -1276,6 +1282,7 @@ mod phynodes {
         );
 
         let phynode = Phynode {
+            binds: None,
             cores: vec![vec![1, 2], vec![3, 4]],
             _additional_fields: Some(HashMap::new()),
         };

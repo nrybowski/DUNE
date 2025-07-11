@@ -1,4 +1,3 @@
-#![feature(let_chains)]
 #![doc = include_str!("../../README.md")]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -8,7 +7,7 @@ use cfg::{Config, Interface, Link, Node, Phynodes};
 // use graphrs::{Graph, GraphSpecs};
 use serde::{Deserialize, Serialize};
 
-use tracing::{info, span, warn, Level};
+use tracing::{Level, info, span, warn};
 use tracing_appender::rolling::{self};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -78,7 +77,7 @@ fn allocate(nodes: &mut HashMap<NodeId, Node>, infra: &mut Phynodes) {
                         && let Some(pids) = &mut node.pinned
                     {
                         pids.iter_mut().for_each(|pinned| {
-                            if let Some(ref mut cores) = &mut pinned.cores {
+                            if let Some(cores) = &mut pinned.cores {
                                 cores
                                     .iter_mut()
                                     .for_each(|(_id, core)| *core = available.pop().unwrap());
@@ -102,7 +101,7 @@ impl Dune {
             .with_writer(stdout.and(logfile))
             .init();
         info!("Tracing and logging enabled!");
-        let mut dune = Self::new(cfg);
+        let dune = Self::new(cfg);
         dune.stats();
         dune
     }
