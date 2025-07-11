@@ -8,7 +8,6 @@ use std::thread;
 use std::vec::Vec;
 use std::{fs, io};
 
-use core_affinity::{self, CoreId as CaCoreId};
 use futures::executor::block_on;
 use futures::future::Inspect;
 use futures::AsyncWriteExt;
@@ -21,6 +20,7 @@ use serde::de::IntoDeserializer;
 use serde::{de::Visitor, Deserialize, Serialize, Serializer};
 use tracing::{debug, error, event, info, instrument, span, warn, Level};
 
+use affinity;
 use minijinja::{context, path_loader, Environment};
 use netlink_packet_route::link::{
     self,
@@ -151,7 +151,7 @@ pub struct Pinned {
     /// Set of instructions launched before starting the process.
     pub post_up: Option<Vec<String>>,
     // #[serde(skip)]
-    cores: Option<Cores>,
+    pub cores: Option<Cores>,
 }
 
 impl Pinned {
@@ -654,9 +654,6 @@ pub struct Node {
     // Hence, they are wrapped in Option so that they are None upon configuration parsing
     /// Node's name
     pub name: Option<String>,
-    /// Mapping of core identifier and real core number
-    // #[serde(skip)]
-    pub cores: Option<HashMap<CoreId, Option<u64>>>,
     /// Phynode to which the current Node is attached
     pub phynode: Option<String>,
     // #[serde(skip)]
@@ -697,29 +694,13 @@ impl Node {
                 .insert(loopback, lo);
         }
 
-        // TODO: sanity check: core_id defined in a single Pinned process unless duplicate entries are explicitely allowed
-        // FIXME: What happens if multiple Pinned process use undertone core_0 ?
-
-        // Collect requested cores. They are currently not allocated.
-        if let Some(pinned) = &mut node.pinned {
-            node.cores = Some(
-                pinned
-                    .iter_mut()
-                    .flat_map(|pinned| pinned.cores())
-                    .map(|core_id| (core_id.0.clone(), None))
-                    .collect(),
-            );
-        }
-
-        // Load files, if any
-        // node.load();
-
         node
     }
 
-    pub fn cores(&self) -> usize {
-        if let Some(cores) = &self.cores {
-            cores.len()
+    pub fn cores(&mut self) -> usize {
+        if let Some(pids) = &mut self.pinned {
+            pids.iter_mut()
+                .fold(0, |acc, pinned| acc + pinned.n_cores())
         } else {
             0
         }
@@ -876,18 +857,29 @@ impl Node {
 
     pub fn configure(&mut self) {
         let ctx = context! {
-        node => self.name,
-        ifaces => self.interfaces.as_ref().unwrap(),
-        ctx => self._additional_fields
+            node => self.name,
+            ifaces => self.interfaces.as_ref().unwrap(),
+            // cores => self.cores,
+            ctx => self._additional_fields
         };
         self.expand(&ctx);
         self.load();
     }
 
     pub fn expand<T: Serialize>(&mut self, ctx: T) {
+        // Expand exec processes
+        if let Some(execs) = &mut self.exec {
+            let env = Environment::new();
+            self.exec = Some(
+                execs
+                    .iter_mut()
+                    .filter_map(|exec| env.render_str(exec, &ctx).ok())
+                    .collect(),
+            );
+        }
         // Expand pinned processes
         if let Some(pinned) = &mut self.pinned {
-            pinned.iter_mut().for_each(|pinned| pinned.expand(&ctx))
+            pinned.iter_mut().for_each(|pinned| pinned.expand(&ctx));
         }
     }
 
@@ -939,29 +931,37 @@ impl Node {
                     if let Some(execs) = &self.exec {
                         info!("Applying <{}> execs.", execs.len());
                         execs.iter().for_each(|exec| {
-                            _sync_exec(exec);
+                            _async_exec(exec);
                         });
                     }
 
                     // 6. Apply pinned to nodes
                     if let Some(pinned) = &self.pinned {
                         info!("Applying <{}> pinned processes.", pinned.len());
-                        pinned.iter().for_each(|pinned| {
-                            if let Some(cores) = &self.cores
-                                && let Some(core_id) = cores.get("core_0")
-                            {
+                        pinned.iter().enumerate().for_each(|(idx, pinned)| {
+                            if let Some(cores) = &pinned.cores {
+                                // Spawn the Pinned process in a separate thread to allow core pinning.
+                                let ids = cores
+                                    .iter()
+                                    .map(|(id, core)| *core as usize)
+                                    .collect::<Vec<usize>>();
                                 let _ = thread::scope(|scope| {
                                     let _ = scope
                                         .spawn(move || {
-                                            if core_affinity::set_for_current(CaCoreId {
-                                                id: core_id.unwrap() as usize,
-                                            }) {
-                                                let mut cmd = pinned.cmd.split_whitespace();
-                                                let _out = Command::new(cmd.next().unwrap())
-                                                    .args(cmd)
-                                                    .spawn();
-                                                // _exec(&pinned.cmd);
+                                            // Set core affinity for current Pinned process.
+                                            if let Err(e) = affinity::set_thread_affinity(&ids) {
+                                                warn!("{e:#?}");
                                             }
+                                            // Build Pinned command.
+                                            let mut cmd = pinned.cmd.split_whitespace();
+                                            let mut builder = Command::new(cmd.next().unwrap());
+                                            builder.args(cmd);
+                                            // Add environment variables, if any.
+                                            if let Some(environ) = &pinned.environ {
+                                                builder.envs(environ);
+                                            }
+                                            // Spawn the Pinned process.
+                                            let _out = builder.spawn();
                                         })
                                         .join();
                                 });

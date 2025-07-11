@@ -41,7 +41,57 @@ pub struct Dune {
     pub nodes: HashMap<NodeId, Node>,
     // topo: Graph<NodeId, ()>,
     pub infra: Phynodes,
-    allocated: bool,
+}
+
+fn allocate(nodes: &mut HashMap<NodeId, Node>, infra: &mut Phynodes) {
+    // Sort nodes by decreasing number of cores to allocate
+    let mut cores: BTreeMap<usize, BTreeSet<NodeId>> = BTreeMap::new();
+    nodes.iter_mut().for_each(|(node_id, node)| {
+        cores
+            .entry(node.cores())
+            .and_modify(|entry| {
+                let _ = entry.insert(node_id.clone());
+            })
+            .or_insert(BTreeSet::from([node_id.clone()]));
+    });
+
+    // Sanity check on requested core count.
+    assert!(
+        cores.iter().fold(0, |acc, (cores, _)| acc + cores) < infra.cores(),
+        "More core booked than available in the defined infrastructure. Please, fix your configuration file."
+    );
+
+    // Allocate cores in decreasing order.
+    cores.iter_mut().rev().for_each(|(_, core_nodes)| {
+        // For each node, reserve the necessary amount of cores then allocate them.
+        core_nodes.iter().for_each(|node_id| {
+            if let Some(node) = nodes.get_mut(node_id) {
+                let n = node.cores();
+                // Search for at least n cores located on the same NUMA node for locality.
+                // This ensures that every Pinned processes of a Node are located on the same NUMA node.
+                // The strategy is dummy: we fill servers in order.
+                for (name, phynode) in infra.nodes.iter_mut() {
+                    if let Some(available) = phynode
+                        .cores
+                        .iter_mut()
+                        .find(|available| available.len() >= n)
+                        && let Some(pids) = &mut node.pinned
+                    {
+                        pids.iter_mut().for_each(|pinned| {
+                            if let Some(ref mut cores) = &mut pinned.cores {
+                                cores
+                                    .iter_mut()
+                                    .for_each(|(_id, core)| *core = available.pop().unwrap());
+                            }
+                        });
+                        // Node is allocated to the specified phynode.
+                        node.phynode = Some(name.clone());
+                        break;
+                    }
+                }
+            }
+        });
+    });
 }
 
 impl Dune {
@@ -54,13 +104,13 @@ impl Dune {
         info!("Tracing and logging enabled!");
         let mut dune = Self::new(cfg);
         dune.stats();
-        dune.allocate();
         dune
     }
 
     pub fn stats(&self) {
+        // TODO: add core count
         info!(
-            "Collected <{}> nodes on <{}> phynodes",
+            "Collected <{}> nodes on <{}> phynodes.",
             self.nodes.len(),
             self.infra.nodes.len()
         );
@@ -94,7 +144,7 @@ impl Dune {
         }
 
         // Load DUNE's configuration
-        let cfg = Config::new(cfg.to_str().unwrap());
+        let mut cfg = Config::new(cfg.to_str().unwrap());
         // let mut topo = Graph::<NodeId, _>::new(GraphSpecs::multi_directed());
 
         // Collect and expand Nodes data
@@ -118,67 +168,18 @@ impl Dune {
             })
         });
 
-        // Load Node's files, if any
-        nodes.iter_mut().for_each(|(_, node)| node.configure());
+        // Allocate cores to Pinned processes.
+        allocate(&mut nodes, &mut cfg.infrastructure);
 
-        Self {
+        let mut ret = Self {
             nodes,
-            // topo,
             infra: cfg.infrastructure,
-            allocated: false,
-        }
-    }
+        };
 
-    /// Allocate requested cores to physical cores, if possible given the provided infrastructure.
-    pub fn allocate(&mut self) {
-        // FIXME: Detect  and report unallocated nodes
-        if !self.allocated {
-            self.allocated = true;
-            // Sort nodes by decreasing number of cores to allocate
-            let mut cores: BTreeMap<usize, BTreeSet<NodeId>> = BTreeMap::new();
-            self.nodes.iter().for_each(|(node_id, node)| {
-                cores
-                    .entry(node.cores())
-                    .and_modify(|entry| {
-                        let _ = entry.insert(node_id.clone());
-                    })
-                    .or_insert(BTreeSet::from([node_id.clone()]));
-            });
+        // Load Node's files, if any
+        ret.nodes.iter_mut().for_each(|(_, node)| node.configure());
 
-            assert!(
-                cores.iter().fold(0, |acc, (cores, _)| acc + cores) < self.infra.cores(),
-                "More core booked than available in the defined infrastructure. Please, fix your configuration file."
-            );
-
-            let mut core_pool = self.infra.clone();
-
-            cores.iter().rev().for_each(|(_, nodes)| {
-                // For each node, reserve the necessary amount of cores then allocate them
-                nodes.iter().for_each(|node_id| {
-                    if let Some(node) = self.nodes.get_mut(node_id) {
-                        let n = node.cores();
-                        // Search for at least n cores located on the same NUMA node for locality.
-                        // This ensures that every Pinned processes of a Node are located on the same NUMA node.
-                        // The strategy is dummy: we fill servers in order.
-                        for (name, phynode) in core_pool.nodes.iter_mut() {
-                            if let Some(available) = phynode
-                                .cores
-                                .iter_mut()
-                                .find(|available| available.len() >= n)
-                            {
-                                if let Some(cores) = &mut node.cores {
-                                    cores.iter_mut().for_each(|(_, core)| {
-                                        *core = Some(available.pop().unwrap())
-                                    });
-                                    node.phynode = Some(name.clone());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                });
-            });
-        }
+        ret
     }
 
     pub fn phynodes(&self) -> Vec<NodeId> {

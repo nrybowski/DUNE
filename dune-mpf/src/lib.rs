@@ -105,7 +105,6 @@ impl TryFrom<&PathBuf> for Config {
     type Error = ();
     fn try_from(cfg: &PathBuf) -> Result<Self, Self::Error> {
         let mut dune = Dune::new(cfg);
-        dune.allocate();
         Self::try_from(&dune).map_err(|_err| ())
     }
 }
@@ -205,7 +204,6 @@ impl MpfDune {
     }
 
     fn setup(&self, phynode: String) {
-        println!("here");
         let logfile = rolling::never("/tmp", "dune.log");
         let stdout = std::io::stdout.with_min_level(tracing::Level::TRACE);
         tracing_subscriber::fmt()
