@@ -14,11 +14,6 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        python_version: ["3.11", "3.12", "3.13"]
-
     steps:
     - uses: actions/checkout@v4
     # - uses: dtolnay/rust-toolchain@nightly
