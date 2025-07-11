@@ -1,0 +1,41 @@
+name: Build
+
+on:
+  push:
+    branches: ["main"]
+    
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python_version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python ${{matrix.python_version}}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{matrix.python_version}}
+
+      - name: Add python-build module
+        run: pip install build
+
+      - name: Build wheel package
+        working-directory: dune-mpf
+        run: python -m build --wheel
+
+      - name: Upload wheel package
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-x86-${{matrix.python_version}}
+          path: target/wheels/dune_mpf*.whl
