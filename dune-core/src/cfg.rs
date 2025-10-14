@@ -992,6 +992,7 @@ impl From<&NodesDefaults> for Node {
         node.sysctls = dflt.sysctls.clone();
         node.exec = dflt.exec.clone();
         node.templates = dflt.templates.clone();
+        node._additional_fields = dflt._additional_fields_.clone();
         node
     }
 }
