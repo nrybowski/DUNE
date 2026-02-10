@@ -171,12 +171,14 @@ impl Dune {
         allocate(&mut nodes, &mut cfg.infrastructure);
 
         let mut ret = Self {
-            nodes,
+            nodes: nodes.clone(),
             infra: cfg.infrastructure,
         };
 
         // Load Node's files, if any
-        ret.nodes.iter_mut().for_each(|(_, node)| node.configure());
+        ret.nodes
+            .iter_mut()
+            .for_each(|(_, node)| node.configure(&nodes));
 
         ret
     }

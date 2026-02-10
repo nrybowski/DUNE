@@ -4,7 +4,8 @@ use std::net::IpAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::str::{self, FromStr};
-use std::thread;
+use std::thread::{self, sleep};
+use std::time::Duration;
 use std::vec::Vec;
 use std::{fs, io};
 
@@ -145,6 +146,8 @@ pub struct Pinned {
     pub pre_down: Option<Vec<String>>,
     /// Set of instructions launched before starting the process.
     pub post_up: Option<Vec<String>>,
+    /// Delay in milliseconds to wait before launching the process.
+    pub delay: Option<u64>,
     // #[serde(skip)]
     pub cores: Option<Cores>,
 }
@@ -245,7 +248,7 @@ pub struct NodesDefaults {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LinksDefaults {
-    pub latency: Option<String>,
+    pub latency: Option<f64>,
     pub metric: Option<u64>,
     pub mtu: Option<u32>,
     pub bw: Option<String>,
@@ -275,7 +278,7 @@ pub struct Interface {
     /// Name of the Interface
     pub name: String,
     /// Latency of the Link
-    pub latency: Option<String>,
+    pub latency: Option<f64>,
     /// Metric of the Interface
     pub metric: Option<u64>,
     /// Bandwidth of the Link
@@ -294,16 +297,19 @@ pub struct Interface {
     pub ctx_addrs: Option<Vec<Addr>>,
     /// Interface's MAC addresse for rendering context
     pub ctx_mac: Option<String>,
+    pub peer_name: Option<String>,
     //// Interface index
     pub ifindex: u32,
+    #[serde(default, flatten)]
+    ctx: Option<HashMap<String, toml::Value>>,
 }
 
 impl Interface {
     fn set_from_field(&mut self, name: &str, field: &toml::Value) {
         match name {
             "latency" => {
-                if let Some(latency) = field.as_str() {
-                    self.latency = Some(latency.to_string());
+                if let Some(latency) = field.as_float() {
+                    self.latency = Some(latency);
                 }
             }
             "metric" => {
@@ -387,6 +393,7 @@ impl Interface {
         // Set interface name
         iface.name = name.clone();
         iface.peer = Some(config.endpoints[1 - idx].clone());
+        iface.peer_name = iface.peer.as_ref().and_then(|peer| Some(peer.node.clone()));
         iface.idx = idx;
         iface.ifindex = ifindex;
 
@@ -625,7 +632,7 @@ impl Interface {
                 .arg("root")
                 .arg("netem")
                 .arg("delay")
-                .arg(latency)
+                .arg(format!("{latency}ms"))
                 .output();
         }
     }
@@ -701,7 +708,7 @@ impl Node {
         }
     }
 
-    pub fn load(&mut self) {
+    pub fn load(&mut self, nodes: &HashMap<String, Node>) {
         // Load Binds, if any
         if let Some(binds) = &mut self.binds {
             info!("Loading <{}> binds", binds.len());
@@ -749,10 +756,28 @@ impl Node {
                                 }
                             });
                         }
+                        let peers: HashMap<String, HashMap<String, toml::Value>> = self
+                            .interfaces
+                            .as_ref()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|(_ifname, iface)| {
+                                if let Some(peer_name) = &iface.peer_name
+                                    && let Some(peer) = nodes.get(peer_name)
+                                    && let Some(vars) = &peer._additional_fields
+                                {
+                                    Some((peer_name.clone(), vars.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
                         // Render template
                         match tmpl.render(context! {
                             node => self.name,
                             ifaces => self.interfaces.as_ref().unwrap(),
+                            peers => peers,
                             ctx => self._additional_fields
                         }) {
                             Ok(rendered) => {
@@ -850,7 +875,7 @@ impl Node {
         }
     }
 
-    pub fn configure(&mut self) {
+    pub fn configure(&mut self, nodes: &HashMap<String, Node>) {
         let ctx = context! {
             node => self.name,
             ifaces => self.interfaces.as_ref().unwrap(),
@@ -858,7 +883,7 @@ impl Node {
             ctx => self._additional_fields
         };
         self.expand(&ctx);
-        self.load();
+        self.load(nodes);
     }
 
     pub fn expand<T: Serialize>(&mut self, ctx: T) {
@@ -954,6 +979,10 @@ impl Node {
                                             // Add environment variables, if any.
                                             if let Some(environ) = &pinned.environ {
                                                 builder.envs(environ);
+                                            }
+                                            // Wait for delay, if specified.
+                                            if let Some(delay) = &pinned.delay {
+                                                sleep(Duration::from_millis(*delay));
                                             }
                                             // Spawn the Pinned process.
                                             let _out = builder.spawn();
@@ -1076,6 +1105,7 @@ impl From<&LinksDefaults> for Interface {
         iface.bandwidth = dflt.bw.clone();
         iface.mtu = dflt.mtu;
         iface.metric = dflt.metric;
+        iface.ctx = dflt._additional_fields.clone();
         iface
     }
 }

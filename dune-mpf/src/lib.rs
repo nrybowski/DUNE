@@ -24,7 +24,7 @@ pub enum Interface {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SimpleInterface {
     pub name: String,
-    pub ip: IpAddr,
+    // pub ip: IpAddr,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -32,6 +32,7 @@ pub struct ExplicitInterface {
     pub link: String,
     pub direction: Direction,
     pub name: String,
+    pub ip: Option<IpAddr>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -123,23 +124,41 @@ impl TryFrom<&Dune> for Config {
                         .iter()
                         .filter_map(|(ifname, iface)| {
                             if let Some(peer) = &iface.peer {
-                                Some(Interface::ExplicitInterface(ExplicitInterface {
-                                    link: format!(
+                                let link_name = if name < &peer.node {
+                                    format!(
                                         "{}:{}-{}:{}",
                                         name.clone(),
                                         ifname,
                                         peer.node,
                                         peer.interface
-                                    ),
+                                    )
+                                } else {
+                                    format!(
+                                        "{}:{}-{}:{}",
+                                        peer.node,
+                                        peer.interface,
+                                        name.clone(),
+                                        ifname,
+                                    )
+                                };
+
+                                Some(Interface::ExplicitInterface(ExplicitInterface {
+                                    link: link_name,
                                     direction: if iface.idx == 0 {
                                         Direction::Forward
                                     } else {
                                         Direction::Backward
                                     },
                                     name: ifname.clone(),
+                                    ip: iface
+                                        .addrs
+                                        .as_ref()
+                                        .and_then(|a| a.first().and_then(|a| Some(a.ip().clone()))),
                                 }))
                             } else {
-                                None
+                                Some(Interface::SimpleInterface(SimpleInterface {
+                                    name: ifname.clone(),
+                                }))
                             }
                         })
                         .collect::<Vec<Interface>>()

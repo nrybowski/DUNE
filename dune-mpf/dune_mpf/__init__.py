@@ -1,11 +1,16 @@
 import ipyparallel
-import logging
 
 import pytoml
 import yaml
 
 import dune_mpf
 import mpf
+
+from .dune_mpf import *
+
+__doc__ = dune_mpf.__doc__
+if hasattr(dune_mpf, "__all__"):
+    __all__ = dune_mpf.__all__
 
 
 def init(path: str):
@@ -42,3 +47,7 @@ def deploy():
     for phynode in dune.phynodes():
         print(f"Installing phynode <{phynode}>")
         mpf.client[mpf.roles[phynode].machine_id].apply_sync(_phynode_init, phynode)
+
+def phynodes():
+    global dune
+    return dune.phynodes()
