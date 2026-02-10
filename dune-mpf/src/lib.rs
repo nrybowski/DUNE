@@ -103,7 +103,7 @@ pub struct Config {
 impl TryFrom<&PathBuf> for Config {
     type Error = ();
     fn try_from(cfg: &PathBuf) -> Result<Self, Self::Error> {
-        let dune = Dune::new(cfg);
+        let dune = Dune::new(cfg, true);
         Self::try_from(&dune).map_err(|_err| ())
     }
 }

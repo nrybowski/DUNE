@@ -17,7 +17,7 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
     // TODO: verify path
-    let dune = Dune::new(&cli.cfg);
+    let dune = Dune::new(&cli.cfg, true);
 
     let cfg = MpfConfig::try_from(&dune).unwrap();
     println!("{:#?}", cfg);

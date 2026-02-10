@@ -875,7 +875,7 @@ impl Node {
         }
     }
 
-    pub fn configure(&mut self, nodes: &HashMap<String, Node>) {
+    pub fn configure(&mut self, nodes: &HashMap<String, Node>, load: bool) {
         let ctx = context! {
             node => self.name,
             ifaces => self.interfaces.as_ref().unwrap(),
@@ -883,7 +883,9 @@ impl Node {
             ctx => self._additional_fields
         };
         self.expand(&ctx);
-        self.load(nodes);
+        if load {
+            self.load(nodes);
+        }
     }
 
     pub fn expand<T: Serialize>(&mut self, ctx: T) {

@@ -101,7 +101,7 @@ impl Dune {
             .with_writer(stdout.and(logfile))
             .init();
         info!("Tracing and logging enabled!");
-        let dune = Self::new(cfg);
+        let dune = Self::new(cfg, true);
         dune.stats();
         dune
     }
@@ -115,7 +115,7 @@ impl Dune {
         );
     }
 
-    pub fn new(cfg: &PathBuf) -> Self {
+    pub fn new(cfg: &PathBuf, load: bool) -> Self {
         fn load_interface(
             nodes: &mut HashMap<String, Node>,
             link: &Link,
@@ -178,7 +178,7 @@ impl Dune {
         // Load Node's files, if any
         ret.nodes
             .iter_mut()
-            .for_each(|(_, node)| node.configure(&nodes));
+            .for_each(|(_, node)| node.configure(&nodes, load));
 
         ret
     }
