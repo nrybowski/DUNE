@@ -664,7 +664,7 @@ pub struct Node {
     pub tmpls: Option<Vec<DuneFile>>,
 
     #[serde(default, flatten)]
-    _additional_fields: Option<HashMap<String, toml::Value>>,
+    pub _additional_fields: Option<HashMap<String, toml::Value>>,
 }
 
 impl Node {
