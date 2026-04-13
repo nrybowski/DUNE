@@ -368,12 +368,14 @@ impl Interface {
         };
 
         let name = &config.endpoints[idx].interface;
+        let node = &config.endpoints[idx].node;
 
         // Override default values, if any specified
         config._additional_fields.iter().for_each(|(idx, field)| {
             let idx = idx.as_str();
             if let Ok(endpoint) = Endpoint::try_from(idx)
                 && &endpoint.interface == name
+                && &endpoint.node == node
             {
                 if let Some(table) = field.as_table() {
                     table.iter().for_each(|(idx, field)| {
