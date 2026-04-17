@@ -1099,7 +1099,7 @@ impl TryFrom<&str> for Endpoint {
 pub struct Link {
     pub endpoints: [Endpoint; 2],
     #[serde(default, flatten)]
-    _additional_fields: HashMap<String, toml::Value>,
+    pub _additional_fields: HashMap<String, toml::Value>,
 }
 
 impl From<&LinksDefaults> for Interface {
