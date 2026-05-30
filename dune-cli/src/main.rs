@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use tracing_subscriber;
 
 use dune_core::Dune;
 use dune_mpf::Config as MpfConfig;
@@ -15,12 +16,15 @@ struct Cli {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let cli = Cli::parse();
     // TODO: verify path
     let dune = Dune::new(&cli.cfg, true);
+    println!("{dune:#?}");
 
-    let cfg = MpfConfig::try_from(&dune).unwrap();
-    println!("{:#?}", cfg);
-    println!("{:#?}", dune.infra);
-    println!("{:#?}", dune.nodes);
+    // let cfg = MpfConfig::try_from(&dune).unwrap();
+    // println!("{:#?}", cfg);
+    // println!("{:#?}", dune.infra);
+    // println!("{:#?}", dune.nodes);
 }

@@ -8,6 +8,7 @@ clap = { version = "4.5.20", features = ["derive"] }
 
 dune-core = { path = "../dune-core" }
 dune-mpf = { path = "../dune-mpf" }
+tracing-subscriber = "0.3.23"
 
 [lints]
 workspace = true

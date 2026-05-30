@@ -115,7 +115,7 @@ impl Dune {
         );
     }
 
-    pub fn new(cfg: &PathBuf, load: bool) -> Self {
+    pub fn from(mut cfg: Config, load: bool) -> Self {
         fn load_interface(
             nodes: &mut HashMap<String, Node>,
             link: &Link,
@@ -141,10 +141,6 @@ impl Dune {
                 interfaces.entry(ifname).or_insert(iface);
             }
         }
-
-        // Load DUNE's configuration
-        let mut cfg = Config::new(cfg.to_str().unwrap());
-        // let mut topo = Graph::<NodeId, _>::new(GraphSpecs::multi_directed());
 
         // Collect and expand Nodes data
         let mut nodes = cfg
@@ -181,6 +177,12 @@ impl Dune {
             .for_each(|(_, node)| node.configure(&nodes, load));
 
         ret
+    }
+
+    pub fn new(cfg: &PathBuf, load: bool) -> Self {
+        // Load DUNE's configuration
+        let cfg = Config::new(cfg.to_str().unwrap());
+        Self::from(cfg, load)
     }
 
     pub fn phynodes(&self) -> Vec<NodeId> {

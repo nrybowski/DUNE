@@ -235,7 +235,7 @@ pub struct Defaults {
 }
 
 // FIXME: type NodeDefaults = Node;
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct NodesDefaults {
     pub sysctls: Option<Sysctl>,
     pub binds: Option<Binds>,
