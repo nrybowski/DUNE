@@ -16,15 +16,8 @@ struct Cli {
 }
 
 fn main() {
-    tracing_subscriber::fmt::init();
-
     let cli = Cli::parse();
     // TODO: verify path
-    let dune = Dune::new(&cli.cfg, true);
+    let dune = Dune::init(&cli.cfg);
     println!("{dune:#?}");
-
-    // let cfg = MpfConfig::try_from(&dune).unwrap();
-    // println!("{:#?}", cfg);
-    // println!("{:#?}", dune.infra);
-    // println!("{:#?}", dune.nodes);
 }
