@@ -8,10 +8,9 @@ futures = "0.3.31"
 graphrs = "0.9.0"
 ipnetwork = "0.20.0"
 minijinja = { version = "2.3.1", features = ["loader"] }
-netlink-packet-route = "0.19.0"
 netns-rs = "0.1.0"
 regex = "1.11.0"
-rtnetlink = "0.14.1"
+rtnetlink = "0.21.0"
 serde = { version = "1.0.210", features = ["derive", "serde_derive"] }
 serde_ignored = "0.1.10"
 toml = "0.8.19"
